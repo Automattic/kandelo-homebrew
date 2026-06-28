@@ -1,0 +1,53 @@
+{
+  "generated_at": "2026-06-28T18:04:19Z",
+  "generator": "kandelo-homebrew-publish 1",
+  "kandelo_abi": 16,
+  "kandelo_commit": "d92eb45af5808831a11a7ab8535e9f1d7f8b0c33",
+  "kandelo_repository": "Automattic/kandelo",
+  "packages": [
+    {
+      "bottle_rebuild": 0,
+      "bottles": [
+        {
+          "arch": "wasm32",
+          "bottle_tag": "wasm32_kandelo",
+          "browser_compatible": false,
+          "built_at": "2026-06-28T18:04:19Z",
+          "built_by": "https://github.com/Automattic/kandelo-homebrew/actions/runs/28331028444",
+          "built_from": {
+            "formula_sha256": "bcf7976e80f07671b9f688e53b465321f9382a48ffcd8ac2361218e2cc7a8517",
+            "kandelo_commit": "d92eb45af5808831a11a7ab8535e9f1d7f8b0c33",
+            "kandelo_repository": "Automattic/kandelo",
+            "tap_commit": "2a226166b1eee07bac8b613d56fc609c9383e9f1",
+            "tap_repository": "Automattic/kandelo-homebrew"
+          },
+          "bytes": 104145,
+          "cache_key_sha": "546e6dc541b6f0ee50a1c2988ba16921197934ccb7449aa77a64c53a3a5de65b",
+          "cellar": "/home/linuxbrew/.linuxbrew/Cellar",
+          "fork_instrumentation": "not-required",
+          "kandelo_abi": 16,
+          "link_manifest": "Kandelo/link/hello-2.12.3-rebuild0-wasm32.json",
+          "prefix": "/home/linuxbrew/.linuxbrew",
+          "runtime_support": [
+            "node"
+          ],
+          "sha256": "e2f71054f6be80cbe2a05dea2dfdd995dcfd87719f9d45a4cbf77e16bf0d2cfd",
+          "status": "success",
+          "url": "https://ghcr.io/v2/automattic/kandelo-homebrew/hello/blobs/sha256:e2f71054f6be80cbe2a05dea2dfdd995dcfd87719f9d45a4cbf77e16bf0d2cfd"
+        }
+      ],
+      "dependencies": [],
+      "formula_metadata": "Kandelo/formula/hello.json",
+      "formula_path": "Formula/hello.rb",
+      "formula_revision": 0,
+      "full_name": "automattic/kandelo-homebrew/hello",
+      "name": "hello",
+      "version": "2.12.3"
+    }
+  ],
+  "release_tag": "bottles-abi-v16",
+  "schema": 1,
+  "tap_commit": "2a226166b1eee07bac8b613d56fc609c9383e9f1",
+  "tap_name": "automattic/kandelo-homebrew",
+  "tap_repository": "Automattic/kandelo-homebrew"
+}
