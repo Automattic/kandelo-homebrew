@@ -1,0 +1,131 @@
+# typed: strict
+# frozen_string_literal: true
+
+require "shellwords"
+
+# KandeloFormulaSupport is the single place Kandelo-specific mechanics live so
+# that formula bodies stay idiomatic Homebrew. It owns SDK/toolchain activation
+# (via the HOMEBREW_KANDELO_ROOT env bridge), the wasm cross-compile
+# environment, the transitional shell-out to a registry build script, installing
+# a built `.wasm` as an executable, and running a `.wasm` under the Node kernel
+# host for `test do`.
+#
+# See docs/plans/2026-07-05-homebrew-tap-layout-idiomatic-spec.md (Track A0) for
+# the contract this implements. The `kandelo_build_package` shell-out is the
+# accepted Tier-2 deviation (spec §6) for heavy ported formulae (ruby/perl/…)
+# whose 49 KB `build-<name>.sh` is not yet decomposed into idiomatic steps.
+module KandeloFormulaSupport
+  # Resolve the Kandelo checkout the SDK/toolchain lives in. Returns the path
+  # string, or nil when the env bridge is not configured.
+  def kandelo_root
+    root = ENV["HOMEBREW_KANDELO_ROOT"] || ENV.fetch("KANDELO_HOMEBREW_KANDELO_ROOT", nil)
+    root.to_s.empty? ? nil : root
+  end
+
+  # Like #kandelo_root but aborts the build when the env bridge is missing. The
+  # SDK/toolchain is worktree-local, not a brew dep yet (spec §6 deviation).
+  def kandelo_require_root!
+    root = kandelo_root
+    odie "HOMEBREW_KANDELO_ROOT must point at a Kandelo checkout" if root.nil?
+    root
+  end
+
+  # The wasm target arch (wasm32 default). Drives the SDK tool prefix and sysroot.
+  def kandelo_arch
+    ENV.fetch("HOMEBREW_KANDELO_ARCH", ENV.fetch("KANDELO_HOMEBREW_ARCH", "wasm32"))
+  end
+
+  # Prepend the Kandelo SDK, Node, and LLVM to PATH and export the LLVM env the
+  # SDK wrappers read. Returns the resolved Kandelo root. This is the single
+  # place SDK/toolchain activation happens.
+  def kandelo_activate_sdk!
+    root = kandelo_require_root!
+    ENV.prepend_path "PATH", "#{root}/sdk/bin"
+
+    if (node = ENV.fetch("HOMEBREW_KANDELO_NODE", nil)).to_s != ""
+      ENV.prepend_path "PATH", File.dirname(node)
+    end
+
+    if (llvm_bin = ENV.fetch("HOMEBREW_KANDELO_LLVM_BIN", nil)).to_s != ""
+      ENV["WASM_POSIX_LLVM_DIR"] = llvm_bin
+      ENV["LLVM_BIN"] = llvm_bin
+      ENV.prepend_path "PATH", llvm_bin
+    end
+
+    root
+  end
+
+  # Export the wasm cross-compile sysroot/glue env and clear host include vars
+  # that would otherwise leak macOS/Xcode headers into a wasm compile. Used by
+  # `test do` blocks that compile a smoke program against a library keg.
+  def kandelo_activate_sysroot!(root = kandelo_require_root!)
+    sysroot = (kandelo_arch == "wasm64") ? "sysroot64" : "sysroot"
+    ENV["WASM_POSIX_SYSROOT"] = "#{root}/#{sysroot}"
+    ENV["WASM_POSIX_GLUE_DIR"] = "#{root}/libc/glue"
+    %w[
+      SDKROOT
+      HOMEBREW_SDKROOT
+      CPATH
+      C_INCLUDE_PATH
+      CPLUS_INCLUDE_PATH
+      OBJC_INCLUDE_PATH
+    ].each { |key| ENV.delete(key) }
+    root
+  end
+
+  # Absolute path to the SDK C compiler wrapper for the active arch.
+  def kandelo_cc(root = kandelo_require_root!)
+    "#{root}/sdk/bin/#{kandelo_arch}posix-cc"
+  end
+
+  # Transitional Tier-2 bridge (spec §6 deviation): activate the SDK, export the
+  # WASM_POSIX_DEP_* build-script contract, and shell out to the registry
+  # `build-<name>.sh`. Returns the out dir the script installed into.
+  #
+  # Deprecated by design: heavy ported formulae land through here before their
+  # `install` is decomposed into idiomatic steps. Every call is a tracked
+  # deviation.
+  def kandelo_build_package(name, script, source_url, source_sha256, script_env: {})
+    root = kandelo_activate_sdk!
+
+    out_dir = buildpath/"kandelo-package-out"
+    ENV["WASM_POSIX_DEP_NAME"] = name
+    ENV["WASM_POSIX_DEP_VERSION"] = version.to_s
+    ENV["WASM_POSIX_DEP_SOURCE_URL"] = source_url
+    ENV["WASM_POSIX_DEP_SOURCE_SHA256"] = source_sha256
+    ENV["WASM_POSIX_DEP_OUT_DIR"] = out_dir
+    ENV["WASM_POSIX_DEP_WORK_DIR"] = buildpath/"kandelo-package-work"
+    ENV["WASM_POSIX_DEP_TARGET_ARCH"] = kandelo_arch
+    script_env.each { |key, value| ENV[key] = value.to_s }
+
+    system "bash", "#{root}/packages/registry/#{name}/#{script}"
+
+    out_dir
+  end
+
+  # Install a built `.wasm` from an out dir as an executable `bin/<bin_name>`.
+  def kandelo_install_bin(out_dir, wasm_name, bin_name)
+    wasm = Pathname(out_dir)/wasm_name
+    chmod 0755, wasm
+    bin.install wasm => bin_name
+    chmod 0755, bin/bin_name
+  end
+
+  # Run a built `.wasm` under the Node kernel host and return its stdout. The
+  # guest inherits the passed `env:` (run-example.ts forwards process env into
+  # the guest, minus PATH), matching how a real `brew test` exercises behavior.
+  def kandelo_run_wasm(bin_path, argv, env: {})
+    root = kandelo_require_root!
+    if (node = ENV.fetch("HOMEBREW_KANDELO_NODE", nil)).to_s != ""
+      ENV.prepend_path "PATH", File.dirname(node)
+    end
+
+    command = "cd #{Shellwords.escape(root)} && "
+    env.each { |key, value| command << "#{key}=#{Shellwords.escape(value.to_s)} " }
+    command << "node --experimental-wasm-exnref --import tsx/esm examples/run-example.ts "
+    command << Shellwords.escape(bin_path.to_s)
+    argv.each { |arg| command << " " << Shellwords.escape(arg.to_s) }
+
+    shell_output(command)
+  end
+end
