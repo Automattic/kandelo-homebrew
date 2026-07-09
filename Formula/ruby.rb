@@ -9,12 +9,10 @@ class Ruby < Formula
   sha256 "7d6149079a63f8ae1d326c9fa65c6019ba2dc3155eae7b39159817911c88958e"
   license any_of: ["Ruby", "BSD-2-Clause"]
 
-  bottle do
-    root_url "https://ghcr.io/v2/automattic/kandelo-homebrew"
-    # TODO(Track C): CI/publish fills these in via brew pr-upload/pr-pull.
-    sha256 cellar: :any, wasm32_kandelo: "0000000000000000000000000000000000000000000000000000000000000000"
-  end
-
+  # No bottle block yet: bottles are machine-generated on publish (Track C) via
+  # brew bottle / pr-pull. Until then `brew install` builds from source. A
+  # hand-written placeholder sha would make a default install try to pour a
+  # nonexistent bottle and fail rather than build from source.
   depends_on "automattic/kandelo-homebrew/zlib"
 
   skip_clean "bin"

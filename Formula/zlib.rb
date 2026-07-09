@@ -9,12 +9,10 @@ class Zlib < Formula
   sha256 "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"
   license "Zlib"
 
-  bottle do
-    root_url "https://ghcr.io/v2/automattic/kandelo-homebrew"
-    # TODO(Track C): CI/publish fills these in via brew pr-upload/pr-pull.
-    sha256 cellar: :any, wasm32_kandelo: "0000000000000000000000000000000000000000000000000000000000000000"
-  end
-
+  # No bottle block yet: bottles are machine-generated on publish (Track C) via
+  # brew bottle / pr-pull. Until then `brew install` builds from source. A
+  # hand-written placeholder sha would make a default install try to pour a
+  # nonexistent bottle and fail rather than build from source.
   skip_clean "lib/libz.a"
 
   def install
