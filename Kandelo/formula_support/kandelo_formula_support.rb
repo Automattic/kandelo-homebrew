@@ -219,6 +219,6 @@ module KandeloFormulaSupport
     }))
     File.rename(temp_path, receipt_path)
   ensure
-    File.delete(temp_path) if defined?(temp_path) && temp_path.exist?
+    File.delete(temp_path) if temp_path&.exist?
   end
 end
