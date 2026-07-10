@@ -1,6 +1,7 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "json"
 require "shellwords"
 
 # KandeloFormulaSupport is the single place Kandelo-specific mechanics live so
@@ -177,7 +178,8 @@ module KandeloFormulaSupport
       wasm_path = staged_wasm
     end
 
-    command = "cd #{Shellwords.escape(root)} && "
+    command = +"cd "
+    command << Shellwords.escape(root) << " && "
     env.each { |key, value| command << "#{key}=#{Shellwords.escape(value.to_s)} " }
     command << "node --experimental-wasm-exnref --import tsx/esm examples/run-example.ts "
     command << Shellwords.escape(wasm_path.to_s)
@@ -192,6 +194,31 @@ module KandeloFormulaSupport
     end
     command << " 2>&1" if merge_stderr
 
-    shell_output(command)
+    output = shell_output(command)
+    kandelo_record_node_execution!(wasm_path, argv)
+    output
+  end
+
+  def kandelo_record_node_execution!(wasm_path, argv)
+    receipt = ENV.fetch("HOMEBREW_KANDELO_NODE_RECEIPT_PATH", nil)
+    return if receipt.to_s.empty?
+
+    abi = Integer(ENV.fetch("HOMEBREW_KANDELO_ABI"), 10)
+    receipt_path = Pathname(receipt)
+    temp_path = Pathname("#{receipt}.tmp-#{Process.pid}")
+    receipt_path.dirname.mkpath
+    File.binwrite(temp_path, JSON.generate({
+      schema:      1,
+      formula:     name,
+      arch:        kandelo_arch,
+      kandelo_abi: abi,
+      runtime:     "node",
+      launcher:    "kandelo_run_wasm",
+      argv:        [wasm_path.to_s, *argv.map(&:to_s)],
+      status:      "success",
+    }))
+    File.rename(temp_path, receipt_path)
+  ensure
+    File.delete(temp_path) if defined?(temp_path) && temp_path.exist?
   end
 end

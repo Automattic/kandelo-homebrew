@@ -21,7 +21,8 @@ Current migration controls and pilots include:
 - `hello`, the original publication control;
 - `zlib` and `ruby`, the first dependency and heavy-runtime Formulae;
 - `sqlite`, `bzip2`, and `xz`, the dependency-first source-build pilot;
-- `openssl`, the first dependency-root library migration.
+- `openssl`, the first dependency-root library migration;
+- `libpng` and `libxml2`, zlib-backed dependency-root libraries.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node
