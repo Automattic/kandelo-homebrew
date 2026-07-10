@@ -35,6 +35,12 @@ module KandeloFormulaSupport
     ENV.fetch("HOMEBREW_KANDELO_ARCH", ENV.fetch("KANDELO_HOMEBREW_ARCH", "wasm32"))
   end
 
+  def kandelo_require_arch!(*supported)
+    return if supported.include?(kandelo_arch)
+
+    odie "unsupported Kandelo architecture #{kandelo_arch}; expected #{supported.join(", ")}"
+  end
+
   # Prepend the Kandelo SDK, Node, and LLVM to PATH and export the LLVM env the
   # SDK wrappers read. Returns the resolved Kandelo root. This is the single
   # place SDK/toolchain activation happens.
@@ -75,7 +81,51 @@ module KandeloFormulaSupport
 
   # Absolute path to the SDK C compiler wrapper for the active arch.
   def kandelo_cc(root = kandelo_require_root!)
-    "#{root}/sdk/bin/#{kandelo_arch}posix-cc"
+    kandelo_tool("cc", root)
+  end
+
+  def kandelo_ar(root = kandelo_require_root!)
+    kandelo_tool("ar", root)
+  end
+
+  def kandelo_ranlib(root = kandelo_require_root!)
+    kandelo_tool("ranlib", root)
+  end
+
+  def kandelo_configure(root = kandelo_require_root!)
+    kandelo_tool("configure", root)
+  end
+
+  def kandelo_tool(name, root = kandelo_require_root!)
+    kandelo_require_arch!("wasm32", "wasm64")
+    "#{root}/sdk/bin/#{kandelo_arch}posix-#{name}"
+  end
+
+  # Establish a clean cross-build environment for an idiomatic Formula
+  # install block, then restore Homebrew's environment when the block exits.
+  def kandelo_wasm_build
+    saved = ENV.to_hash
+    root = kandelo_activate_sdk!
+    kandelo_activate_sysroot!(root)
+
+    %w[CFLAGS CPPFLAGS CXXFLAGS LDFLAGS MACOSX_DEPLOYMENT_TARGET].each { |key| ENV.delete(key) }
+    ENV["CC"] = kandelo_cc(root)
+    ENV["CXX"] = kandelo_tool("c++", root)
+    ENV["AR"] = kandelo_ar(root)
+    ENV["RANLIB"] = kandelo_ranlib(root)
+    ENV["NM"] = kandelo_tool("nm", root)
+    ENV["STRIP"] = kandelo_tool("strip", root)
+    ENV["PKG_CONFIG"] = kandelo_tool("pkg-config", root)
+
+    yield root
+  ensure
+    ENV.replace(saved) if saved
+  end
+
+  # The SDK configure wrapper supplies the target host and a default prefix.
+  # The later Formula prefix wins and keeps installed paths keg-relative.
+  def kandelo_std_configure_args
+    ["--prefix=#{prefix}"]
   end
 
   # Transitional Tier-2 bridge (spec §6 deviation): activate the SDK, export the
@@ -114,17 +164,33 @@ module KandeloFormulaSupport
   # Run a built `.wasm` under the Node kernel host and return its stdout. The
   # guest inherits the passed `env:` (run-example.ts forwards process env into
   # the guest, minus PATH), matching how a real `brew test` exercises behavior.
-  def kandelo_run_wasm(bin_path, argv, env: {})
+  def kandelo_run_wasm(bin_path, argv, env: {}, stdin: nil, merge_stderr: false)
     root = kandelo_require_root!
     if (node = ENV.fetch("HOMEBREW_KANDELO_NODE", nil)).to_s != ""
       ENV.prepend_path "PATH", File.dirname(node)
     end
 
+    wasm_path = Pathname(bin_path)
+    if wasm_path.extname != ".wasm"
+      staged_wasm = testpath/"#{wasm_path.basename}.wasm"
+      File.binwrite(staged_wasm, File.binread(wasm_path))
+      wasm_path = staged_wasm
+    end
+
     command = "cd #{Shellwords.escape(root)} && "
     env.each { |key, value| command << "#{key}=#{Shellwords.escape(value.to_s)} " }
     command << "node --experimental-wasm-exnref --import tsx/esm examples/run-example.ts "
-    command << Shellwords.escape(bin_path.to_s)
+    command << Shellwords.escape(wasm_path.to_s)
     argv.each { |arg| command << " " << Shellwords.escape(arg.to_s) }
+
+    if stdin.nil?
+      command << " < /dev/null"
+    else
+      stdin_path = testpath/"#{wasm_path.basename}.stdin"
+      File.binwrite(stdin_path, stdin)
+      command << " < #{Shellwords.escape(stdin_path.to_s)}"
+    end
+    command << " 2>&1" if merge_stderr
 
     shell_output(command)
   end

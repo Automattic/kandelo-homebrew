@@ -1,52 +1,41 @@
-# Kandelo Homebrew Tap Template
+# Kandelo Homebrew Tap
 
-This directory is a reviewable template for the future
-`Automattic/kandelo-homebrew` tap. It lives in the main Kandelo repository so
-schema, validator, workflow, and VFS-builder work can be reviewed before the
-real tap repository exists.
+This repository is Kandelo's first-party Homebrew tap. It owns Formula source,
+Kandelo-specific Formula support, generated bottle blocks, and publication
+evidence. The `Automattic/kandelo` repository owns the kernel, host runtime,
+SDK, package-build infrastructure, and trusted publisher.
 
-This is not a user-facing Homebrew tap yet. Do not document `brew tap` or
-`brew install` commands from this scaffold until the real tap, bottle tag
-support, publish workflow, and Node/browser validation have landed.
+The tap is still experimental. Do not publish user-facing `brew tap` or
+`brew install` instructions until a stock guest Homebrew install has been
+validated inside Kandelo.
 
-Expected future tap shape:
+## Formulae
 
-```text
-Formula/
-  <formula>.rb
-Kandelo/
-  metadata.json
-  formula/<formula>.json
-  link/<formula>-<version>-rebuild<N>-<arch>.json
-  reports/<formula>-<version>-rebuild<N>-<arch>.provenance.json
-```
+Formulae under `Formula/` use normal Homebrew metadata and build their staged
+upstream source through Kandelo's worktree-local SDK. Shared cross-compilation
+and runtime-test mechanics live in
+`Kandelo/formula_support/kandelo_formula_support.rb`.
 
-This template currently contains:
+Current migration controls and pilots include:
 
-- `Formula/hello.rb`, the first Kandelo Homebrew formula scaffold;
-- JSON Schemas for the Kandelo sidecar metadata contract;
-- `hello` example metadata for schema and validator development.
-- an `xtask homebrew-sidecars` generator that converts produced bottle bytes
-  and workflow evidence into the expected sidecar files.
-- a shared host `planHomebrewVfs()` metadata planner for Node and browser VFS
-  tooling.
-- a Node-side `build-homebrew-vfs-image.ts` builder that verifies bottle bytes,
-  pours/link-manifests them into a Homebrew prefix, and emits precomposed VFS
-  images plus build reports.
+- `hello`, the original publication control;
+- `zlib` and `ruby`, the first dependency and heavy-runtime Formulae;
+- `sqlite`, `bzip2`, and `xz`, the dependency-first source-build pilot.
 
-The reusable trusted publisher lives in the main Kandelo repository at
-`.github/workflows/reusable-homebrew-bottle-publish.yml`. It is meant to be
-called by the future tap repository after its formulae exist. The workflow
-builds selected formula bottles through `scripts/dev-shell.sh`, uploads bottle
-bytes to the GHCR/Homebrew blob URL shape, publishes generated `Kandelo/`
-sidecars into the tap, and records failed attempts under
-`Kandelo/reports/failures/` without replacing the last-green
-`Kandelo/metadata.json`.
+The SDK is not yet a Homebrew dependency. Trusted builds supply an
+`HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node
+host used by Formula `test do` blocks. Guest installation therefore requires a
+published Kandelo bottle; building from source is currently a maintainer and CI
+workflow.
 
-Sidecar generation from produced bottle bytes is a separate handoff: the
-workflow requires a trusted `sidecar-command` to populate
-`$KANDELO_HOMEBREW_SIDECAR_ROOT` before sidecars are published and validated.
+## Publication State
 
-Homebrew formula and bottle metadata remain the contract consumed by `brew`.
-Kandelo sidecar metadata is the bounded contract consumed by host VFS tooling,
-Node validation, browser/gallery gates, and publication audits.
+Bottle metadata must be generated from the same trusted build that produces
+the bottle bytes. Do not hand-write placeholder hashes or reuse bottle data
+across Kandelo ABI versions. The existing `hello` sidecar files are historical
+publication evidence; broader publication is gated on the native Homebrew OCI
+publisher and real guest-install validation in `Automattic/kandelo`.
+
+Formula Ruby and Homebrew bottle metadata remain authoritative for Homebrew.
+Files under `Kandelo/` are additive validation and provenance data and must not
+be required for a stock guest install.
