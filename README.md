@@ -22,7 +22,8 @@ Current migration controls and pilots include:
 - `zlib` and `ruby`, the first dependency and heavy-runtime Formulae;
 - `sqlite`, `bzip2`, and `xz`, the dependency-first source-build pilot;
 - `openssl`, the first dependency-root library migration;
-- `libpng` and `libxml2`, zlib-backed dependency-root libraries.
+- `libpng` and `libxml2`, zlib-backed dependency-root libraries;
+- `libcxx`, the LLVM C++ standard library, ABI runtime, and bundled unwinder.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node
