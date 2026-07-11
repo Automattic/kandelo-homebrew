@@ -8,10 +8,9 @@ class Ed < Formula
   url "https://ftpmirror.gnu.org/gnu/ed/ed-1.22.5.tar.lz"
   mirror "https://ftp.gnu.org/gnu/ed/ed-1.22.5.tar.lz"
   sha256 "56e107ddc2f29dad6690376c15bf9751509e1ee3b8241710e44edbe5c3a158cc"
-  license "GPL-3.0-or-later"
+  license "GPL-2.0-or-later"
 
   depends_on "lzip" => :build
-  depends_on "automattic/kandelo-homebrew/sed"
 
   skip_clean "bin/ed"
 
@@ -20,10 +19,21 @@ class Ed < Formula
 
     instrumented = buildpath/"ed.instrumented"
     kandelo_wasm_build do |root|
-      system "./configure", "--prefix=#{prefix}"
+      system "./configure", "--prefix=#{prefix}", "CC=#{kandelo_cc(root)}"
       system "make"
       system "#{root}/scripts/run-wasm-fork-instrument.sh", buildpath/"ed", "-o", instrumented
     end
+
+    rm buildpath/"red"
+    (buildpath/"red").write <<~SH
+      #!/bin/sh
+      case $0 in
+        */*) bindir=${0%/*}/ ;;
+        *) bindir= ;;
+      esac
+      exec "${bindir}ed" --restricted "$@"
+    SH
+    chmod 0755, buildpath/"red"
 
     kandelo_install_bin(buildpath, "ed.instrumented", "ed")
     bin.install buildpath/"red"
@@ -35,8 +45,8 @@ class Ed < Formula
   test do
     assert_match(/GNU ed 1\.22\.5$/, kandelo_run_wasm(bin/"ed", ["--version"]))
     assert_path_exists bin/"red"
-    assert_match(/exec "\$\{bindir\}"ed --restricted "\$@"/, (bin/"red").read)
-    assert_equal "ed.1", (man1/"red.1").readlink.to_s
+    assert_match(/exec "\$\{bindir\}ed" --restricted "\$@"/, (bin/"red").read)
+    assert_equal (man1/"ed.1").read, (man1/"red.1").read
 
     document = testpath/"document.txt"
     document.write("alpha\nbeta\ngamma\n")
@@ -59,7 +69,7 @@ class Ed < Formula
       bin/"ed",
       ["--restricted", "-", "document.txt"],
       env:             { "KERNEL_CWD" => testpath },
-      stdin:           "!printf forbidden\nq\n",
+      stdin:           "H\n!printf forbidden\nq\n",
       merge_stderr:    true,
       expected_status: 1,
     )
