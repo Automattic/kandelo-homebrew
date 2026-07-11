@@ -14,7 +14,7 @@ class KandeloFormulaSupportTest < Minitest::Test
     include KandeloFormulaSupport
 
     attr_accessor :build_path, :nix_path, :root_path, :test_path
-    attr_reader :command, :expected_status, :system_args
+    attr_reader :command, :expected_status, :recorded_launcher, :system_args
 
     def kandelo_require_root!
       root_path || "/tmp/kandelo root"
@@ -48,7 +48,10 @@ class KandeloFormulaSupportTest < Minitest::Test
     end
     # rubocop:enable Naming/PredicateMethod
 
-    def kandelo_record_node_execution!(_wasm_path, _argv); end
+    def kandelo_record_node_execution!(_wasm_path, _argv, launcher: "kandelo_run_wasm")
+      @recorded_launcher = launcher
+      nil
+    end
   end
 
   def test_node_execution_receipt_is_optional
@@ -201,5 +204,30 @@ class KandeloFormulaSupportTest < Minitest::Test
 
     assert_equal "runtime-ok\n", output
     assert_equal 2, harness.expected_status
+  end
+
+  def test_pty_execution_uses_tap_owned_runner
+    harness = Harness.new
+    output = harness.kandelo_run_pty_wasm(
+      "program.wasm", ["note.txt"],
+      env:               { "KERNEL_CWD" => "/tmp/formula test" },
+      inputs:            ["\u001c", "beta", "\r"],
+      rerun_inputs:      ["\u0018"],
+      guest_files:       { "/etc/program.conf" => "/formula/program.conf" },
+      guest_directories: ["/home/linuxbrew/.linuxbrew/var/program/save"],
+      writable_guest_directories: ["/home/linuxbrew/.linuxbrew/var/program"]
+    )
+
+    assert_equal "runtime-ok\n", output
+    assert_includes harness.command, "run-pty-wasm.ts"
+    assert_includes harness.command, "KANDELO_FORMULA_PTY_CONFIG_JSON="
+    assert_includes harness.command, "note.txt"
+    assert_includes harness.command, "beta"
+    assert_includes harness.command, "rerunInputs"
+    assert_includes harness.command, "/etc/program.conf"
+    assert_includes harness.command, "/home/linuxbrew/.linuxbrew/var/program"
+    assert_includes harness.command, "writableGuestDirectories"
+    assert_includes harness.command, "program.wasm"
+    assert_equal "kandelo_run_pty_wasm", harness.recorded_launcher
   end
 end
