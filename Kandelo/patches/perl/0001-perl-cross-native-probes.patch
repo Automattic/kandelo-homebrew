@@ -1,0 +1,91 @@
+--- a/cnf/configure_tool.sh
++++ b/cnf/configure_tool.sh
+@@ -88,8 +88,8 @@
+ whichprog ar AR ar || die "Cannot find ar"
+ whichprog nm NM nm
+ whichprog ranlib RANLIB ranlib
+-whichprog readelf READELF readelf || die "Cannot find readelf"
+-whichprog objdump OBJDUMP objdump || die "Cannot find objdump"
++whichprog readelf READELF readelf || true
++whichprog objdump OBJDUMP objdump || true
+ 
+ # XXX: this looks wrong, but the usemmldlt code depends on $ld being able
+ # to compile try.c. What kind of moron could have written that. Oh wait.
+--- a/cnf/configure_type.sh
++++ b/cnf/configure_type.sh
+@@ -38,19 +38,26 @@
+ 		return
+ 	fi
+ 
+-	if not try_readelf --syms > try.out 2>>$cfglog; then
+-		result 'unknown'
+-		die "Cannot determine sizeof($2), use -D${1}size="
+-		return
++	_size=''
++	if [ -n "$readelf" ] && try_readelf --syms > try.out 2>>$cfglog; then
++		_size=`grep foo try.out | sed -r -e 's/.*: [0-9]+ +//' -e 's/ .*//' -e 's/^0+//g'`
+ 	fi
+ 
+-	result=`grep foo try.out | sed -r -e 's/.*: [0-9]+ +//' -e 's/ .*//' -e 's/^0+//g'`
+-	if [ -z "$result" ]; then
+-		result "unknown"
+-		die "Cannot determine sizeof($2)"
+-	elif [ "$result" -gt 0 ]; then
+-		define $1 "$result"
+-		result $result\ `bytes $result`
++	# Native Mach-O objects cannot be inspected by ELF readelf. The buildmini
++	# probe is executable, so compile and run it rather than guessing host ABI.
++	if [ -z "$_size" ] || ! [ "$_size" -gt 0 ] 2>/dev/null; then
++		try_start
++		try_includes $3
++		try_add '#include <stdio.h>'
++		try_add "int main(void) { printf(\"%lu\", (unsigned long)sizeof($2)); return 0; }"
++		if try_link && run ./try > try.out 2>>$cfglog; then
++			_size=`cat try.out | tr -d '\n'`
++		fi
++	fi
++
++	if [ -n "$_size" ] && [ "$_size" -gt 0 ] 2>/dev/null; then
++		define $1 "$_size"
++		result $_size\ `bytes $_size`
+ 	else
+ 		result "unknown"
+ 		die "Cannot determine sizeof($2)"
+--- a/cnf/configure_type_sel.sh
++++ b/cnf/configure_type_sel.sh
+@@ -113,7 +113,7 @@
+ 	fi
+ 
+ 	# Most targets use .data but PowerPC has .sdata instead
+-	if try_compile && try_objdump -j .data -j .sdata -s; then
++	if [ -n "$objdump" ] && try_compile && try_objdump -j .data -j .sdata -s; then
+ 		bo=`grep '11' try.out | grep '44' | sed -e 's/  .*//' -e 's/[^1-8]//g' -e 's/\([1-8]\)\1/\1/g'`
+ 	else
+ 		bo=''
+@@ -120,6 +120,26 @@
+ 		bo=''
+ 	fi
+ 
++	# Native Mach-O objects cannot be inspected by ELF objdump. The buildmini
++	# probe is executable, so derive byte order by running it on the host.
++	if [ -z "$bo" ]; then
++		try_start
++		try_add '#include <stdio.h>'
++		try_add '#include <stdint.h>'
++		try_add 'int main(void) {'
++		if [ "$uvsize" = 8 ]; then
++			try_add 'union { uint64_t i; unsigned char c[8]; } u = { 0x0807060504030201ULL };'
++			try_add 'for (int i = 0; i < 8; i++) printf("%d", (int)u.c[i]);'
++		else
++			try_add 'union { uint32_t i; unsigned char c[4]; } u = { 0x04030201 };'
++			try_add 'for (int i = 0; i < 4; i++) printf("%d", (int)u.c[i]);'
++		fi
++		try_add 'return 0; }'
++		if try_link && run ./try > try.out 2>>$cfglog; then
++			bo=`cat try.out | tr -d '\n'`
++		fi
++	fi
++
+ 	if [ -n "$bo" ]; then
+ 		define byteorder "$bo"
+ 		result "$bo"
