@@ -17,7 +17,7 @@ class Bc < Formula
   def install
     kandelo_require_arch!("wasm32")
 
-    kandelo_wasm_build do |root|
+    kandelo_wasm_build do
       ENV.delete("BC_ENV_ARGS")
 
       system kandelo_configure, *kandelo_std_configure_args,
@@ -25,12 +25,6 @@ class Bc < Formula
         "--without-libedit",
         "--without-readline"
       system "make", "-j#{ENV.make_jobs}"
-
-      instrumented = buildpath/"dc/dc.instrumented"
-      system "#{root}/scripts/run-wasm-fork-instrument.sh",
-        buildpath/"dc/dc", "-o", instrumented
-      mv instrumented, buildpath/"dc/dc"
-
       system "make", "install"
     end
   end
