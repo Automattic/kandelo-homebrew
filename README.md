@@ -41,7 +41,8 @@ Current migration controls and pilots include:
 - `m4`, the GNU macro processor with process-executing builtins backed by the tap's Dash shell;
 - `gawk`, GNU's pattern scanning and text-processing language;
 - `file`, compression-aware file type identification backed by the complete
-  `libmagic` database.
+  `libmagic` database;
+- `zip`, Info-ZIP archive creation with maintained security fixes.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node
