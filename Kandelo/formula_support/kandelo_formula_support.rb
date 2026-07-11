@@ -730,7 +730,7 @@ module KandeloFormulaSupport
 
     config = JSON.generate({ cases: cases })
     runner = Pathname(__dir__)/"run-virtual-network-pairs.ts"
-    command = "cd #{Shellwords.escape(root)} && "
+    command = +"cd #{Shellwords.escape(root)} && "
     command << "KANDELO_FORMULA_VIRTUAL_PAIRS_JSON=#{Shellwords.escape(config)} "
     command << "node --experimental-wasm-exnref --import tsx/esm "
     command << "#{Shellwords.escape(runner.to_s)} #{Shellwords.escape(root)} "
