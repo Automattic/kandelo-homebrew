@@ -25,17 +25,47 @@ class Make < Formula
 
       system kandelo_configure, *kandelo_std_configure_args,
         "--disable-nls",
-        "--disable-load",
         "--disable-dependency-tracking"
       system "make", "-j#{ENV.make_jobs}"
+      system "make", "install"
     end
-
-    kandelo_install_bin(buildpath, "make", "make")
   end
 
   test do
     assert_match(/^GNU Make 4\.4\.1$/,
       kandelo_run_wasm(bin/"make", ["--version"]))
+
+    root = kandelo_activate_sdk!
+    kandelo_activate_sysroot!(root)
+    (testpath/"kandelo_plugin.c").write <<~C
+      #include <gnumake.h>
+
+      int plugin_is_GPL_compatible;
+
+      static char *kandelo_plugin(const char *name, unsigned int argc, char **argv) {
+        const char prefix[] = "plugin=";
+        const char *value = argc == 0 ? "" : argv[0];
+        unsigned int prefix_len = sizeof(prefix) - 1;
+        unsigned int value_len = 0;
+        while (value[value_len] != '\\0')
+          ++value_len;
+
+        char *result = gmk_alloc(prefix_len + value_len + 1);
+        for (unsigned int i = 0; i < prefix_len; ++i)
+          result[i] = prefix[i];
+        for (unsigned int i = 0; i < value_len; ++i)
+          result[prefix_len + i] = value[i];
+        result[prefix_len + value_len] = '\\0';
+        return result;
+      }
+
+      int kandelo_plugin_gmk_setup(const gmk_floc *floc) {
+        gmk_add_function("kandelo-plugin", kandelo_plugin, 1, 1, GMK_FUNC_DEFAULT);
+        return 1;
+      }
+    C
+    system kandelo_cc(root), "-shared", "-fPIC", "-I#{include}",
+      testpath/"kandelo_plugin.c", "-o", testpath/"kandelo_plugin.so"
 
     dash = testpath/"dash"
     dash.binwrite((formula_opt_bin("automattic/kandelo-homebrew/dash")/"dash").binread)
@@ -49,13 +79,17 @@ class Make < Formula
     (testpath/"Makefile").write <<~MAKEFILE
       SHELL := dash
       .PHONY: all
-      all: report.txt recursive.txt
+      load kandelo_plugin.so(kandelo_plugin_gmk_setup)
+      all: report.txt recursive.txt plugin.txt
 
       report.txt: alpha.txt beta.txt
       \t@printf 'name=%s inputs=%s\\n' '$(NAME)' '$^' > $@
 
       recursive.txt:
       \t@make --no-print-directory -f child.mk CHILD='$(NAME)'
+
+      plugin.txt:
+      \t@printf '%s\\n' '$(kandelo-plugin $(NAME))' > $@
     MAKEFILE
     (testpath/"child.mk").write <<~MAKEFILE
       SHELL := dash
@@ -67,6 +101,7 @@ class Make < Formula
     assert_empty kandelo_run_wasm(bin/"make", ["-j2", "NAME=Kandelo", "all"], env: env)
     assert_equal "name=Kandelo inputs=alpha.txt beta.txt\n", (testpath/"report.txt").read
     assert_equal "child=Kandelo\n", (testpath/"recursive.txt").read
+    assert_equal "plugin=Kandelo\n", (testpath/"plugin.txt").read
     up_to_date = kandelo_run_wasm(bin/"make", ["NAME=Kandelo", "all"], env: env)
     assert_match(/\Amake(?:\.wasm)?: Nothing to be done for 'all'\.\n\z/, up_to_date)
 
@@ -82,6 +117,19 @@ class Make < Formula
 end
 
 __END__
+diff --git a/src/gnumake.h b/src/gnumake.h
+--- a/src/gnumake.h
++++ b/src/gnumake.h
+@@ -35,6 +35,8 @@ typedef char *(*gmk_func_ptr)(const char *nm, unsigned int argc, char **argv);
+ # else
+ #  define GMK_EXPORT  __declspec(dllimport)
+ # endif
++#elif defined(__wasm__)
++# define GMK_EXPORT  __attribute__((visibility("default")))
+ #else
+ # define GMK_EXPORT
+ #endif
+
 diff --git a/src/main.c b/src/main.c
 index af01f36..b669875 100644
 --- a/src/main.c
@@ -89,23 +137,25 @@ index af01f36..b669875 100644
 @@ -1160,11 +1160,11 @@ temp_stdin_unlink ()
      }
  }
- 
+-
++
 -#ifdef MK_OS_ZOS
 +#if defined(MK_OS_ZOS) || defined(__wasm__)
  extern char **environ;
  #endif
- 
+-
++
 -#if defined(_AMIGA) || defined(MK_OS_ZOS)
 +#if defined(_AMIGA) || defined(MK_OS_ZOS) || defined(__wasm__)
  int
  main (int argc, char **argv)
  #else
-@@ -1482,7 +1482,7 @@ main (int argc, char **argv, char **envp)
+@@ -1482,6 +1482,6 @@ main (int argc, char **argv, char **envp)
       done before $(MAKE) is figured out so its definitions will not be
       from the environment.  */
- 
+-
++
 -#ifdef MK_OS_ZOS
 +#if defined(MK_OS_ZOS) || defined(__wasm__)
    char **envp = environ;
  #endif
- 
