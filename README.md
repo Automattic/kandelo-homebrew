@@ -30,6 +30,7 @@ Current migration controls and pilots include:
 - `gzip`, the GNU compression CLI with native gunzip and zcat aliases;
 - `grep`, GNU regular-expression and file search for the leaf CLI wave.
 - `ed`, the conforming line editor and restricted editor required by patch workflows.
+- `patch`, GNU's real multi-format file transformation utility replacing the compact metadata scanner.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node
