@@ -34,7 +34,8 @@ Current migration controls and pilots include:
 - `pcre2`, the Unicode-capable regex library, POSIX wrapper, and upstream CLI tools;
 - `dash`, the dependency-free POSIX shell with instrumented subprocess support;
 - `make`, GNU dependency-driven build automation using the tap's POSIX shell;
-- `ed`, the conforming line editor and restricted editor required by patch workflows.
+- `ed`, the conforming line editor and restricted editor required by patch workflows;
+- `m4`, the GNU macro processor with process-executing builtins.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node
