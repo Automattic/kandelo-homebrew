@@ -712,6 +712,36 @@ module KandeloFormulaSupport
     shell_output("cd #{Shellwords.escape(root)} && #{command} < /dev/null")
   end
 
+  # Run paired programs on isolated Kandelo machines joined by the host's
+  # LocalVirtualNetwork. This exercises bind/listen/connect and datagram paths
+  # that a single-process formula runner cannot cover.
+  def kandelo_run_virtual_network_pairs(bin_path, cases)
+    root = kandelo_require_root!
+    if (node = ENV.fetch("HOMEBREW_KANDELO_NODE", nil)).to_s != ""
+      ENV.prepend_path "PATH", File.dirname(node)
+    end
+
+    wasm_path = Pathname(bin_path)
+    if wasm_path.extname != ".wasm"
+      staged_wasm = testpath/"#{wasm_path.basename}.wasm"
+      File.binwrite(staged_wasm, File.binread(wasm_path))
+      wasm_path = staged_wasm
+    end
+
+    config = JSON.generate({ cases: cases })
+    runner = Pathname(__dir__)/"run-virtual-network-pairs.ts"
+    command = "cd #{Shellwords.escape(root)} && "
+    command << "KANDELO_FORMULA_VIRTUAL_PAIRS_JSON=#{Shellwords.escape(config)} "
+    command << "node --experimental-wasm-exnref --import tsx/esm "
+    command << "#{Shellwords.escape(runner.to_s)} #{Shellwords.escape(root)} "
+    command << Shellwords.escape(wasm_path.to_s)
+    command << " 2>&1"
+
+    output = shell_output(command)
+    kandelo_record_node_execution!(wasm_path, [], launcher: "kandelo_run_virtual_network_pairs")
+    output
+  end
+
   def kandelo_record_node_execution!(wasm_path, argv, launcher: "kandelo_run_wasm")
     receipt = ENV.fetch("HOMEBREW_KANDELO_NODE_RECEIPT_PATH", nil)
     return if receipt.to_s.empty?
