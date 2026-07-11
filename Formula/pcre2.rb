@@ -109,9 +109,9 @@ class Pcre2 < Formula
 
     config_output = kandelo_run_wasm(bin/"pcre2test", ["-C"])
     assert_match(/PCRE2 version 10\.44/, config_output)
-    assert_match(/8-bit, 16-bit and 32-bit support/, config_output)
-    assert_match(/Unicode support/, config_output)
-    assert_match(/JIT support: no/, config_output)
+    %w[8 16 32].each { |width| assert_match(/#{width}-bit support/, config_output) }
+    assert_match(/UTF and UCP support/, config_output)
+    assert_match(/No just-in-time compiler support/, config_output)
 
     unicode_input = "Gr\u00fc\u00dfe\u{1F680}\n123\u{1F680}\n\u6771\u4eac\u{1F680}\n"
     assert_equal "Gr\u00fc\u00dfe\n\u6771\u4eac\n", kandelo_run_wasm(
