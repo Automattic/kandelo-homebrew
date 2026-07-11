@@ -17,6 +17,10 @@ class Openssl < Formula
     openssl_target = (kandelo_arch == "wasm64") ? "linux-generic64" : "linux-generic32"
 
     kandelo_wasm_build do
+      # OpenSSL records CC verbatim in libcrypto's build information. PATH
+      # already resolves this name through the activated Kandelo SDK.
+      ENV["CC"] = "#{kandelo_arch}posix-cc"
+
       system "perl", "Configure", openssl_target,
         "-DOPENSSL_NO_AFALGENG=1",
         "no-asm",
@@ -46,6 +50,7 @@ class Openssl < Formula
     source = testpath/"openssl-smoke.c"
     wasm = testpath/"openssl-smoke.wasm"
     source.write <<~C
+      #include <openssl/crypto.h>
       #include <openssl/evp.h>
       #include <openssl/ssl.h>
       #include <stdio.h>
@@ -58,13 +63,16 @@ class Openssl < Formula
           0x5c, 0x35, 0xd1, 0x35, 0xd3, 0x56, 0xbb, 0x70,
           0x8a, 0xe4, 0xae, 0xe9, 0x65, 0x56, 0xfc, 0x26,
         };
+        static const char expected_compiler[] = "compiler: #{kandelo_arch}posix-cc ";
         unsigned char digest[EVP_MAX_MD_SIZE];
         unsigned int digest_len = 0;
+        const char *compiler = OpenSSL_version(OPENSSL_CFLAGS);
         SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
 
         if (ctx == NULL) return 1;
         if (EVP_Digest("kandelo", 7, digest, &digest_len, EVP_sha256(), NULL) != 1) return 2;
         if (digest_len != sizeof(expected) || memcmp(digest, expected, sizeof(expected)) != 0) return 3;
+        if (strncmp(compiler, expected_compiler, sizeof(expected_compiler) - 1) != 0) return 4;
 
         SSL_CTX_free(ctx);
         puts("openssl-ok");
