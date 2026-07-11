@@ -21,6 +21,7 @@ Current migration controls and pilots include:
 - `hello`, the original publication control;
 - `zlib` and `ruby`, the first dependency and heavy-runtime Formulae;
 - `sqlite` and the `bzip2`/`xz` compression tools and static libraries, the dependency-first source-build pilot;
+- `libmagic`, the full file-type database and compression-aware identification library;
 - `openssl`, the first dependency-root library migration;
 - `libpng` and `libxml2`, zlib-backed dependency-root libraries;
 - `libcxx`, the LLVM C++ standard library, ABI runtime, and bundled unwinder;
