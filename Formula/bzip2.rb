@@ -22,7 +22,7 @@ class Bzip2 < Formula
         "CC=#{kandelo_cc}",
         "AR=#{kandelo_ar}",
         "RANLIB=#{kandelo_ranlib}",
-        "CFLAGS=-Wall -Winline -O2 -D_FILE_OFFSET_BITS=64",
+        "CFLAGS=-Wall -Winline -O2 -fPIC -D_FILE_OFFSET_BITS=64",
         "LDFLAGS=",
         "libbz2.a", "bzip2"
     end
@@ -51,6 +51,10 @@ class Bzip2 < Formula
 
     source = testpath/"bzip2-smoke.c"
     wasm = testpath/"bzip2-smoke.wasm"
+    plugin_source = testpath/"bzip2-plugin.c"
+    plugin = testpath/"bzip2-plugin.so"
+    loader_source = testpath/"bzip2-loader.c"
+    loader = testpath/"bzip2-loader.wasm"
     source.write <<~C
       #include <bzlib.h>
       #include <stdio.h>
@@ -72,6 +76,66 @@ class Bzip2 < Formula
         return 0;
       }
     C
+    plugin_source.write <<~C
+      #include <bzlib.h>
+
+      const char *kandelo_bzip2_version(void) {
+        return BZ2_bzlibVersion();
+      }
+    C
+    loader_source.write <<~C
+      #include <dlfcn.h>
+      #include <stdio.h>
+      #include <stdlib.h>
+      #include <string.h>
+
+      typedef const char *(*version_fn)(void);
+
+      /* Wasm side modules import libc from main; retain the stdio surface used by bzlib.o. */
+      static void retain_libbz2_imports(int argc, char **argv) {
+        char buffer[1] = { 0 };
+        const char *path = argv[0] == NULL ? "" : argv[0];
+        FILE *file;
+
+        if (argc != 0) return;
+        file = fopen(path, "r");
+        if (file != NULL) fclose(file);
+        file = fdopen(0, "r");
+        if (file != NULL) fclose(file);
+        fputc(0, stdout);
+        (void)ferror(stderr);
+        (void)fflush(stdout);
+        (void)fgetc(stdin);
+        (void)ungetc(0, stdin);
+        (void)fread(buffer, 1, sizeof(buffer), stdin);
+        (void)fwrite(buffer, 1, sizeof(buffer), stdout);
+        exit((int)strlen(path));
+      }
+
+      int main(int argc, char **argv) {
+        void *handle;
+        void *allocation;
+        version_fn version;
+
+        retain_libbz2_imports(argc, argv);
+        if (argc != 2) return 2;
+        allocation = calloc(1, 1);
+        if (allocation == NULL) return 5;
+        free(allocation);
+        handle = dlopen(argv[1], RTLD_NOW);
+        if (handle == NULL) {
+          fprintf(stderr, "dlopen: %s\\n", dlerror());
+          return 3;
+        }
+        version = (version_fn)dlsym(handle, "kandelo_bzip2_version");
+        if (version == NULL) {
+          fprintf(stderr, "dlsym: %s\\n", dlerror());
+          return 4;
+        }
+        printf("bzip2-side-module %s ok\\n", version());
+        return 0;
+      }
+    C
     kandelo_wasm_build do
       ENV["PKG_CONFIG_LIBDIR"] = (lib/"pkgconfig").to_s
       ENV.delete("PKG_CONFIG_PATH")
@@ -82,8 +146,12 @@ class Bzip2 < Formula
       flags = Utils.safe_popen_read(pkgconf, "--static", "--cflags", "--libs", "bzip2").split
       assert_includes flags, "-lbz2"
       system kandelo_cc, source, *flags, "-o", wasm
+      system kandelo_cc, "-shared", "-fPIC", plugin_source, *flags, "-o", plugin
+      system kandelo_cc, loader_source, "-ldl", "-Wl,--export-all", "-o", loader
     end
     assert_equal "libbz2-ok\n", kandelo_run_wasm(wasm, [])
+    assert_equal "bzip2-side-module #{version}, 13-Jul-2019 ok\n",
+      kandelo_run_wasm(loader, [plugin])
 
     input = "Kandelo bzip2 round trip\n".b
     compressed = kandelo_run_wasm(bin/"bzip2", ["-c"], stdin: input)
