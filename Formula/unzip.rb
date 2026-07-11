@@ -13,7 +13,7 @@ class Unzip < Formula
   skip_clean "bin/unzip", "bin/funzip"
 
   # Upstream is unmaintained. Follow Homebrew's maintained formula and apply
-  # Ubuntu's security, correctness, and reproducibility fixes.
+  # Ubuntu's complete security, correctness, and reproducibility quilt series.
   patch do
     url "https://archive.ubuntu.com/ubuntu/pool/main/u/unzip/unzip_6.0-28ubuntu4.1.debian.tar.xz"
     sha256 "d123c8e6972dbdd17ba1a4920fb57ed2ede9237dbae149dcbf55df829c77baf3"
@@ -37,8 +37,8 @@ class Unzip < Formula
       patches/17-restore-unix-timestamps-accurately.patch
       patches/18-cve-2014-9913-unzip-buffer-overflow.patch
       patches/19-cve-2016-9844-zipinfo-buffer-overflow.patch
-      patches/20-cve-2018-1000035-unzip-buffer-overflow.patch
       patches/20-unzip60-alt-iconv-utf8.patch
+      patches/20-cve-2018-1000035-unzip-buffer-overflow.patch
       patches/21-fix-warning-messages-on-big-files.patch
       patches/22-cve-2019-13232-fix-bug-in-undefer-input.patch
       patches/23-cve-2019-13232-zip-bomb-with-overlapped-entries.patch
@@ -47,6 +47,9 @@ class Unzip < Formula
       patches/26-cve-2019-13232-fix-bug-in-uzinflate.patch
       patches/27-zipgrep-avoid-test-errors.patch
       patches/28-cve-2022-0529-and-cve-2022-0530.patch
+      patches/handle_windows_zip64.patch
+      patches/29-fix-troff-warning.patch
+      patches/CVE-2021-4217.patch
     ]
   end
 
