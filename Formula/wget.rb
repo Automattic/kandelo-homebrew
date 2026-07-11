@@ -33,6 +33,7 @@ class Wget < Formula
       ENV["gl_cv_func_strerror_0_works"] = "yes"
 
       system kandelo_configure, *kandelo_std_configure_args,
+        "--sysconfdir=#{etc}",
         "--disable-nls",
         "--disable-iri",
         "--disable-pcre",
@@ -47,12 +48,22 @@ class Wget < Formula
     end
 
     kandelo_install_bin(buildpath/"src", "wget.instrumented", "wget")
+    etc.install buildpath/"doc/sample.wgetrc" => "wgetrc"
+    man1.install buildpath/"doc/wget.1"
   end
 
   test do
-    version_output = kandelo_run_wasm(bin/"wget", ["--version"])
+    assert_path_exists etc/"wgetrc"
+    assert_path_exists man1/"wget.1"
+
+    test_wgetrc = testpath/"wgetrc"
+    test_wgetrc.binwrite((etc/"wgetrc").binread)
+    version_output = kandelo_run_wasm(
+      bin/"wget", ["--config=wgetrc", "--version"], env: { "KERNEL_CWD" => testpath }
+    )
     assert_match(/^GNU Wget 1\.25\.0 /, version_output)
     assert_match(%r{(?:\A|\s)\+ssl/openssl(?:\s|\z)}, version_output)
+    assert_match(/#{Regexp.escape((etc/"wgetrc").to_s)} \(system\)/, version_output)
 
     page = kandelo_run_wasm(
       bin/"wget",
