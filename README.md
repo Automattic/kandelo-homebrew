@@ -26,7 +26,8 @@ Current migration controls and pilots include:
 - `libcxx`, the LLVM C++ standard library, ABI runtime, and bundled unwinder;
 - `libcurl`, the TLS, compression, threaded-resolver, and Unix-socket transfer library;
 - `curl`, the matching command-line transfer client linked against the tap library;
-- `sed`, the GNU stream-editing CLI used by shell and build workflows.
+- `sed`, the GNU stream-editing CLI used by shell and build workflows;
+- `gzip`, the GNU compression CLI with native gunzip and zcat aliases.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node

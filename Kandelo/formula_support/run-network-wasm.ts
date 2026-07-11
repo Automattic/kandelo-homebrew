@@ -31,7 +31,7 @@ async function main(): Promise<void> {
   const rootfsImage = await rootfs.saveImage();
   const host = new NodeKernelHost({
     maxWorkers: 8,
-    enableTcpNetwork: true,
+    enableTcpNetwork: process.env.KANDELO_FORMULA_ENABLE_NETWORK === "1",
     rootfsImage,
     onStdout: (_pid: number, data: Uint8Array) => process.stdout.write(data),
     onStderr: (_pid: number, data: Uint8Array) => process.stderr.write(data),

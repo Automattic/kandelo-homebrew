@@ -164,8 +164,11 @@ module KandeloFormulaSupport
 
   # Run a built `.wasm` under the Node kernel host and return its stdout. The
   # guest inherits the passed `env:`, matching how a real `brew test` exercises
-  # behavior. `network: true` opts into Node's real external-TCP backend.
-  def kandelo_run_wasm(bin_path, argv, env: {}, stdin: nil, merge_stderr: false, network: false)
+  # behavior. `network: true` opts into Node's real external-TCP backend, while
+  # `preserve_argv0: true` keeps multicall command names such as gunzip.
+  def kandelo_run_wasm(
+    bin_path, argv, env: {}, stdin: nil, merge_stderr: false, network: false, preserve_argv0: false
+  )
     root = kandelo_require_root!
     if (node = ENV.fetch("HOMEBREW_KANDELO_NODE", nil)).to_s != ""
       ENV.prepend_path "PATH", File.dirname(node)
@@ -173,21 +176,24 @@ module KandeloFormulaSupport
 
     wasm_path = Pathname(bin_path)
     if wasm_path.extname != ".wasm"
-      staged_wasm = testpath/"#{wasm_path.basename}.wasm"
+      staged_name = preserve_argv0 ? wasm_path.basename : "#{wasm_path.basename}.wasm"
+      staged_wasm = testpath/staged_name
       File.binwrite(staged_wasm, File.binread(wasm_path))
       wasm_path = staged_wasm
     end
 
     command = +"cd "
     command << Shellwords.escape(root) << " && "
-    if network
+    isolated_runner = network || preserve_argv0
+    if isolated_runner
       guest_env = JSON.generate(env.transform_values(&:to_s))
       command << "KANDELO_FORMULA_GUEST_ENV_JSON=#{Shellwords.escape(guest_env)} "
+      command << "KANDELO_FORMULA_ENABLE_NETWORK=#{network ? 1 : 0} "
     else
       env.each { |key, value| command << "#{key}=#{Shellwords.escape(value.to_s)} " }
     end
     command << "node --experimental-wasm-exnref --import tsx/esm "
-    if network
+    if isolated_runner
       runner = Pathname(__dir__)/"run-network-wasm.ts"
       command << "#{Shellwords.escape(runner.to_s)} #{Shellwords.escape(root)} "
     else
