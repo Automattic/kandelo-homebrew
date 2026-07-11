@@ -14,7 +14,7 @@ class KandeloFormulaSupportTest < Minitest::Test
     include KandeloFormulaSupport
 
     attr_accessor :test_path
-    attr_reader :command
+    attr_reader :command, :expected_status
 
     def kandelo_require_root!
       "/tmp/kandelo root"
@@ -24,8 +24,9 @@ class KandeloFormulaSupportTest < Minitest::Test
       test_path || Pathname("/tmp/formula test")
     end
 
-    def shell_output(command)
+    def shell_output(command, expected_status = 0)
       @command = command
+      @expected_status = expected_status
       "runtime-ok\n"
     end
 
@@ -83,5 +84,14 @@ class KandeloFormulaSupportTest < Minitest::Test
       assert_includes harness.command, "run-network-wasm.ts"
       assert_includes harness.command, "KANDELO_FORMULA_ENABLE_NETWORK=0"
     end
+  end
+
+  def test_execution_accepts_an_expected_nonzero_status
+    harness = Harness.new
+
+    output = harness.kandelo_run_wasm("program.wasm", ["missing"], expected_status: 2)
+
+    assert_equal "runtime-ok\n", output
+    assert_equal 2, harness.expected_status
   end
 end
