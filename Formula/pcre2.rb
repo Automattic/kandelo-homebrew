@@ -29,6 +29,9 @@ class Pcre2 < Formula
         "--enable-pcre2-32",
         "--enable-unicode",
         "--disable-jit",
+        # The authoritative source-kind registry contract has no dependencies.
+        # Keep compressed-input support out of this first formula contract;
+        # tap main does not yet publish libbz2's headers/static library.
         "--disable-pcre2grep-libz",
         "--disable-pcre2grep-libbz2",
         "--disable-pcre2test-libedit",
@@ -68,6 +71,9 @@ class Pcre2 < Formula
 
       system "make", "install"
     end
+
+    stable_metadata = [bin/"pcre2-config", *lib.glob("pkgconfig/*.pc")]
+    stable_metadata.each { |path| inreplace path, prefix, opt_prefix }
   end
 
   test do
@@ -81,6 +87,22 @@ class Pcre2 < Formula
     assert_path_exists include/"pcre2posix.h"
     assert_path_exists bin/"pcre2grep"
     assert_path_exists bin/"pcre2test"
+    assert_path_exists bin/"pcre2-config"
+
+    stable_metadata = [bin/"pcre2-config", *lib.glob("pkgconfig/*.pc")]
+    stable_metadata.each do |path|
+      contents = path.read
+      assert_includes contents, opt_prefix.to_s
+      refute_includes contents, prefix.to_s
+    end
+    runtime_artifacts = [bin/"pcre2grep", bin/"pcre2test", *lib.glob("libpcre2*.a")]
+    runtime_artifacts.each do |path|
+      contents = File.binread(path)
+      refute_includes contents, prefix.to_s
+      refute_includes contents, "/private/tmp/"
+      refute_includes contents, "/Users/"
+      refute_includes contents, "/nix/store/"
+    end
 
     version_output = kandelo_run_wasm(bin/"pcre2grep", ["--version"])
     assert_match(/pcre2grep version 10\.44/, version_output)
@@ -151,6 +173,9 @@ class Pcre2 < Formula
       pkgconf = formula_opt_bin("pkgconf")/"pkg-config"
       flags = shell_output("#{pkgconf} --static --cflags --libs libpcre2-posix").split
       %w[-lpcre2-posix -lpcre2-8].each { |flag| assert_includes flags, flag }
+      assert_includes flags, "-I#{opt_include}"
+      assert_includes flags, "-L#{opt_lib}"
+      refute_includes flags.join(" "), prefix.to_s
       system kandelo_cc, source, *flags, "-o", wasm
     end
     assert_equal "pcre2-unicode-ok:0-7\n", kandelo_run_wasm(wasm, [])
