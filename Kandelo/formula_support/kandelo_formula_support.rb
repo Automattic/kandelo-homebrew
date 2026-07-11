@@ -165,9 +165,12 @@ module KandeloFormulaSupport
   # Run a built `.wasm` under the Node kernel host and return its stdout. The
   # guest inherits the passed `env:`, matching how a real `brew test` exercises
   # behavior. `network: true` opts into Node's real external-TCP backend, while
-  # `preserve_argv0: true` keeps multicall command names such as gunzip.
+  # `preserve_argv0: true` keeps multicall command names such as gunzip, and
+  # `expected_status:` permits tests for specified nonzero results such as a
+  # grep no-match status.
   def kandelo_run_wasm(
-    bin_path, argv, env: {}, stdin: nil, merge_stderr: false, network: false, preserve_argv0: false
+    bin_path, argv, env: {}, stdin: nil, merge_stderr: false, network: false,
+    preserve_argv0: false, expected_status: 0
   )
     root = kandelo_require_root!
     if (node = ENV.fetch("HOMEBREW_KANDELO_NODE", nil)).to_s != ""
@@ -211,7 +214,7 @@ module KandeloFormulaSupport
     end
     command << " 2>&1" if merge_stderr
 
-    output = shell_output(command)
+    output = shell_output(command, expected_status)
     kandelo_record_node_execution!(wasm_path, argv)
     output
   end
