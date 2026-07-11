@@ -72,7 +72,9 @@ class Less < Formula
     ncurses = formula_opt_prefix("automattic/kandelo-homebrew/ncurses")
     less_bytes = File.binread(bin/"less")
     assert_includes less_bytes, "#{ncurses}/share/terminfo"
-    assert_includes less_bytes, opt_prefix.to_s
+    assert_includes less_bytes, "#{opt_bin}/.sysless"
+    assert_includes less_bytes, "#{opt_prefix}/etc/sysless"
+    assert_includes less_bytes, "#{opt_prefix}/etc/syslesskey"
     [bin/"less", bin/"lesskey", bin/"lessecho"].each do |command|
       refute_includes File.binread(command), prefix.to_s
     end
