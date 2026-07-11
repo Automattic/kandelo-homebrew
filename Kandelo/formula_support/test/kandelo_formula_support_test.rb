@@ -213,6 +213,69 @@ class KandeloFormulaSupportTest < Minitest::Test
     end
   end
 
+  def test_framebuffer_execution_uses_browser_runner_and_removes_stale_host_dist
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      root = Pathname(dir)/"kandelo root"
+      host_dist = root/"host/dist"
+      host_dist.mkpath
+      (host_dist/"stale.js").binwrite("stale")
+      command = Pathname(dir)/"fbdoom"
+      wad = Pathname(dir)/"doom1.wad"
+      command.binwrite("\0asm")
+      wad.binwrite("IWAD")
+
+      harness = Harness.new
+      harness.root_path = root.to_s
+      output = harness.kandelo_run_framebuffer_wasm(
+        command,
+        argv:                ["-iwad", "/doom1.wad"],
+        guest_files:         { "/doom1.wad" => wad },
+        min_writes:          3,
+        min_nonblank_pixels: 2_000,
+        timeout_ms:          4_000,
+      )
+
+      assert_equal "runtime-ok\n", output
+      assert_includes harness.command, "run-framebuffer-wasm.ts"
+      assert_includes harness.command, root.to_s.shellescape
+      assert_includes harness.command, command.to_s.shellescape
+      assert_includes harness.command, "doom1.wad"
+      assert_includes harness.command, "minWrites"
+      assert_includes harness.command, "minNonBlankPixels"
+      assert_includes harness.command, "2000"
+      assert_includes harness.command, "4000"
+      refute_path_exists host_dist
+    end
+  end
+
+  def test_framebuffer_execution_uses_meaningful_pixel_default
+    harness = Harness.new
+
+    harness.kandelo_run_framebuffer_wasm("fbdoom.wasm")
+
+    assert_includes harness.command, "minNonBlankPixels"
+    assert_includes harness.command, "1000"
+  end
+
+  def test_framebuffer_execution_expands_relative_formula_paths
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      command = Pathname(dir)/"fbdoom"
+      wad = Pathname(dir)/"doom1.wad"
+      command.binwrite("\0asm")
+      wad.binwrite("IWAD")
+      harness = Harness.new
+
+      Dir.chdir(dir) do
+        harness.kandelo_run_framebuffer_wasm(
+          Pathname("fbdoom"), guest_files: { "/doom1.wad" => Pathname("doom1.wad") }
+        )
+      end
+
+      assert_includes harness.command, command.to_s.shellescape
+      assert_includes harness.command, wad.to_s
+    end
+  end
+
   def test_execution_accepts_explicit_guest_exec_programs
     harness = Harness.new
 
