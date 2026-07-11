@@ -33,7 +33,8 @@ Current migration controls and pilots include:
 - `grep`, GNU regular-expression and file search for the leaf CLI wave;
 - `pcre2`, the Unicode-capable regex library, POSIX wrapper, and upstream CLI tools;
 - `dash`, the dependency-free POSIX shell with instrumented subprocess support;
-- `make`, GNU dependency-driven build automation using the tap's POSIX shell.
+- `make`, GNU dependency-driven build automation using the tap's POSIX shell;
+- `ed`, the conforming line editor and restricted editor required by patch workflows.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node
