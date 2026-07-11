@@ -283,7 +283,54 @@ module KandeloFormulaSupport
     output
   end
 
-  def kandelo_record_node_execution!(wasm_path, argv)
+  # Run an interactive Wasm program through Kandelo's real PTY path. Inputs
+  # are written in order after the process starts, with short delays so curses
+  # applications can render and transition between prompts. Writable guest
+  # directories use isolated mounts that survive every spawn in this run.
+  def kandelo_run_pty_wasm(
+    bin_path, argv, inputs:, env: {}, guest_files: {}, guest_directories: [],
+    writable_guest_directories: [], rerun_inputs: nil, expected_status: 0,
+    initial_delay_ms: 500, input_delay_ms: 180, cols: 100, rows: 30
+  )
+    root = kandelo_require_root!
+    if (node = ENV.fetch("HOMEBREW_KANDELO_NODE", nil)).to_s != ""
+      ENV.prepend_path "PATH", File.dirname(node)
+    end
+
+    wasm_path = Pathname(bin_path)
+    if wasm_path.extname != ".wasm"
+      staged_wasm = testpath/"#{wasm_path.basename}.wasm"
+      File.binwrite(staged_wasm, File.binread(wasm_path))
+      wasm_path = staged_wasm
+    end
+
+    config = JSON.generate({
+      env:              env,
+      inputs:           inputs,
+      rerunInputs:      rerun_inputs,
+      guestFiles:       guest_files.transform_values(&:to_s),
+      guestDirectories: guest_directories.map(&:to_s),
+      writableGuestDirectories: writable_guest_directories.map(&:to_s),
+      initialDelayMs:   initial_delay_ms,
+      inputDelayMs:     input_delay_ms,
+      cols:             cols,
+      rows:             rows,
+    })
+    runner = Pathname(__dir__)/"run-pty-wasm.ts"
+    command = "cd #{Shellwords.escape(root)} && "
+    command << "KANDELO_FORMULA_PTY_CONFIG_JSON=#{Shellwords.escape(config)} "
+    command << "node --experimental-wasm-exnref --import tsx/esm "
+    command << "#{Shellwords.escape(runner.to_s)} #{Shellwords.escape(root)} "
+    command << Shellwords.escape(wasm_path.to_s)
+    argv.each { |arg| command << " #{Shellwords.escape(arg.to_s)}" }
+    command << " 2>&1"
+
+    output = shell_output(command, expected_status)
+    kandelo_record_node_execution!(wasm_path, argv, launcher: "kandelo_run_pty_wasm")
+    output
+  end
+
+  def kandelo_record_node_execution!(wasm_path, argv, launcher: "kandelo_run_wasm")
     receipt = ENV.fetch("HOMEBREW_KANDELO_NODE_RECEIPT_PATH", nil)
     return if receipt.to_s.empty?
 
@@ -297,7 +344,7 @@ module KandeloFormulaSupport
       arch:        kandelo_arch,
       kandelo_abi: abi,
       runtime:     "node",
-      launcher:    "kandelo_run_wasm",
+      launcher:    launcher,
       argv:        [wasm_path.to_s, *argv.map(&:to_s)],
       status:      "success",
     }))
