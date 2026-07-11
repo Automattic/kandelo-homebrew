@@ -7,9 +7,10 @@ require "shellwords"
 # KandeloFormulaSupport is the single place Kandelo-specific mechanics live so
 # that formula bodies stay idiomatic Homebrew. It owns SDK/toolchain activation
 # (via the HOMEBREW_KANDELO_ROOT env bridge), the wasm cross-compile
-# environment, fork instrumentation, the transitional shell-out to a registry
-# build script, installing a built `.wasm` as an executable, and running a
-# `.wasm` under the Node kernel host for `test do`.
+# environment, isolated native build tools, fork instrumentation, the
+# transitional shell-out to a registry build script, installing a built `.wasm`
+# as an executable, and running a `.wasm` under the Node kernel host for
+# `test do`.
 #
 # See docs/plans/2026-07-05-homebrew-tap-layout-idiomatic-spec.md (Track A0) for
 # the contract this implements. The `kandelo_build_package` shell-out is the
@@ -100,6 +101,45 @@ module KandeloFormulaSupport
   def kandelo_tool(name, root = kandelo_require_root!)
     kandelo_require_arch!("wasm32", "wasm64")
     "#{root}/sdk/bin/#{kandelo_arch}posix-#{name}"
+  end
+
+  # Return a wrapper for a native build tool from Kandelo's canonical dev
+  # shell. Homebrew's compiler shims include Formula dependency paths, so a
+  # cross Formula that depends on target libcxx cannot use those shims for host
+  # generators. The wrapper changes to the Kandelo checkout before evaluating
+  # its flake; callers must pass absolute source and build paths. Wrap the
+  # highest-level build driver practical so a multi-file native phase enters
+  # the dev shell once rather than once per compiler invocation.
+  def kandelo_host_tool(name)
+    odie "invalid host tool name: #{name}" unless name.match?(/\A[+._a-z0-9-]+\z/i)
+
+    root = kandelo_require_root!
+    nix = kandelo_nix_executable
+    odie "Nix executable not found at #{nix}" unless nix.executable?
+
+    wrapper = buildpath/"kandelo-host-#{name.tr("+", "x")}"
+    wrapper.delete if wrapper.exist?
+    wrapper.write <<~SH
+      #!/bin/sh
+      set -eu
+      export PATH=#{nix.dirname.to_s.shellescape}:/usr/bin:/bin
+      cd #{root.shellescape}
+      exec ./scripts/dev-shell.sh #{name} "$@"
+    SH
+    File.chmod(0755, wrapper)
+    wrapper
+  end
+
+  def kandelo_host_cc
+    kandelo_host_tool("cc")
+  end
+
+  def kandelo_host_cxx
+    kandelo_host_tool("c++")
+  end
+
+  def kandelo_nix_executable
+    Pathname("/nix/var/nix/profiles/default/bin/nix")
   end
 
   # Establish a clean cross-build environment for an idiomatic Formula
