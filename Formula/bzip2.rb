@@ -8,6 +8,9 @@ class Bzip2 < Formula
   url "https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz"
   sha256 "ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269"
   license "bzip2-1.0.6"
+  revision 1
+
+  depends_on "pkgconf" => :test
 
   skip_clean "bin/bzip2", "lib/libbz2.a"
   link_overwrite "include/bzlib.h"
@@ -26,11 +29,25 @@ class Bzip2 < Formula
     kandelo_install_bin(buildpath, "bzip2", "bzip2")
     lib.install "libbz2.a"
     include.install "bzlib.h"
+    (lib/"pkgconfig").mkpath
+    (lib/"pkgconfig/bzip2.pc").write <<~EOS
+      prefix=#{opt_prefix}
+      exec_prefix=${prefix}
+      libdir=${exec_prefix}/lib
+      includedir=${prefix}/include
+
+      Name: bzip2
+      Description: Lossless, block-sorting data compression
+      Version: #{version}
+      Libs: -L${libdir} -lbz2
+      Cflags: -I${includedir}
+    EOS
   end
 
   test do
     assert_path_exists lib/"libbz2.a"
     assert_path_exists include/"bzlib.h"
+    assert_path_exists lib/"pkgconfig/bzip2.pc"
 
     source = testpath/"bzip2-smoke.c"
     wasm = testpath/"bzip2-smoke.wasm"
@@ -56,7 +73,15 @@ class Bzip2 < Formula
       }
     C
     kandelo_wasm_build do
-      system kandelo_cc, source, "-I#{include}", "-L#{lib}", "-lbz2", "-o", wasm
+      ENV["PKG_CONFIG_LIBDIR"] = (lib/"pkgconfig").to_s
+      ENV.delete("PKG_CONFIG_PATH")
+      ENV.delete("PKG_CONFIG_SYSROOT_DIR")
+      pkgconf = formula_opt_bin("pkgconf")/"pkg-config"
+      assert_equal opt_prefix.to_s,
+        Utils.safe_popen_read(pkgconf, "--variable=prefix", "bzip2").strip
+      flags = Utils.safe_popen_read(pkgconf, "--static", "--cflags", "--libs", "bzip2").split
+      assert_includes flags, "-lbz2"
+      system kandelo_cc, source, *flags, "-o", wasm
     end
     assert_equal "libbz2-ok\n", kandelo_run_wasm(wasm, [])
 
