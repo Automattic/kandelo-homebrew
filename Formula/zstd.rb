@@ -14,6 +14,8 @@ class Zstd < Formula
     "MIT",
   ]
 
+  depends_on "pkgconf" => :test
+
   skip_clean "bin/zstd", "lib/libzstd.a"
 
   def install
@@ -42,6 +44,10 @@ class Zstd < Formula
     end
 
     inreplace lib/"pkgconfig/libzstd.pc", prefix, opt_prefix
+
+    # These optional shell helpers require leaf packages (grep and less).
+    rm [bin/"zstdgrep", bin/"zstdless"]
+    rm [man1/"zstdgrep.1", man1/"zstdless.1"]
   end
 
   test do
@@ -49,18 +55,16 @@ class Zstd < Formula
     assert_equal "zstd", (bin/"zstdcat").readlink.to_s
     assert_equal "zstd", (bin/"unzstd").readlink.to_s
     assert_equal "zstd", (bin/"zstdmt").readlink.to_s
-    assert_path_exists bin/"zstdgrep"
-    assert_path_exists bin/"zstdless"
+    refute_path_exists bin/"zstdgrep"
+    refute_path_exists bin/"zstdless"
     assert_path_exists lib/"libzstd.a"
     assert_path_exists include/"zstd.h"
     assert_path_exists include/"zstd_errors.h"
     assert_path_exists include/"zdict.h"
     assert_path_exists man1/"zstd.1"
-    assert_path_exists man1/"zstdgrep.1"
-    assert_path_exists man1/"zstdless.1"
     assert_includes (lib/"pkgconfig/libzstd.pc").read, "prefix=#{opt_prefix}"
 
-    input = ("Kandelo zstd threaded round trip\n" * 4_096).b
+    input = ("Kandelo zstd threaded round trip\n" * 65_536).b
     compressed = kandelo_run_wasm(bin/"zstd", ["-q", "-T2", "-c"], stdin: input)
     assert_equal input,
       kandelo_run_wasm(bin/"unzstd", ["-q", "-c"], stdin: compressed, preserve_argv0: true).b
@@ -75,29 +79,40 @@ class Zstd < Formula
       #include <zstd.h>
 
       int main(void) {
-        const char input[] = "kandelo libzstd api";
-        char compressed[128];
-        char output[128];
+        static char input[2 * 1024 * 1024];
+        static char compressed[ZSTD_COMPRESSBOUND(sizeof(input))];
+        static char output[sizeof(input)];
         ZSTD_CCtx *context = ZSTD_createCCtx();
         size_t compressed_size;
         size_t output_size;
 
         if (context == NULL) return 1;
         if (ZSTD_isError(ZSTD_CCtx_setParameter(context, ZSTD_c_nbWorkers, 2))) return 2;
+        if (ZSTD_isError(ZSTD_CCtx_setParameter(context, ZSTD_c_jobSize, 1 << 20))) return 3;
+        for (size_t i = 0; i < sizeof(input); ++i) input[i] = (char)(i * 31U + i / 257U);
         compressed_size = ZSTD_compress2(
           context, compressed, sizeof(compressed), input, sizeof(input)
         );
         ZSTD_freeCCtx(context);
-        if (ZSTD_isError(compressed_size)) return 3;
+        if (ZSTD_isError(compressed_size)) return 4;
         output_size = ZSTD_decompress(output, sizeof(output), compressed, compressed_size);
-        if (ZSTD_isError(output_size)) return 4;
-        if (output_size != sizeof(input) || memcmp(input, output, sizeof(input)) != 0) return 5;
+        if (ZSTD_isError(output_size)) return 5;
+        if (output_size != sizeof(input) || memcmp(input, output, sizeof(input)) != 0) return 6;
         printf("libzstd %s threaded-ok\\n", ZSTD_versionString());
         return 0;
       }
     C
-    kandelo_wasm_build do |root|
-      system kandelo_cc(root), source, "-I#{include}", "-L#{lib}", "-lzstd", "-pthread", "-o", wasm
+    kandelo_wasm_build do
+      ENV["PKG_CONFIG_LIBDIR"] = (lib/"pkgconfig").to_s
+      ENV.delete("PKG_CONFIG_PATH")
+      ENV.delete("PKG_CONFIG_SYSROOT_DIR")
+      pkgconf = formula_opt_bin("pkgconf")/"pkg-config"
+      assert_equal opt_prefix.to_s,
+        Utils.safe_popen_read(pkgconf, "--variable=prefix", "libzstd").strip
+      flags = Utils.safe_popen_read(pkgconf, "--static", "--cflags", "--libs", "libzstd").split
+      assert_includes flags, "-lzstd"
+      assert_includes flags, "-pthread"
+      system kandelo_cc, source, *flags, "-o", wasm
     end
     assert_equal "libzstd #{version} threaded-ok\n", kandelo_run_wasm(wasm, [])
   end
