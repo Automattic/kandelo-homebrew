@@ -13,11 +13,11 @@ class KandeloFormulaSupportTest < Minitest::Test
   class Harness
     include KandeloFormulaSupport
 
-    attr_accessor :build_path, :nix_path, :test_path
+    attr_accessor :build_path, :nix_path, :root_path, :test_path
     attr_reader :command, :expected_status, :system_args
 
     def kandelo_require_root!
-      "/tmp/kandelo root"
+      root_path || "/tmp/kandelo root"
     end
 
     def testpath
@@ -73,7 +73,7 @@ class KandeloFormulaSupportTest < Minitest::Test
     end
   end
 
-  def test_host_tool_reenters_the_dev_shell_from_the_kandelo_root
+  def test_host_tool_reenters_the_dev_shell_and_preserves_the_caller_directory
     Dir.mktmpdir("kandelo-formula-support") do |dir|
       harness = Harness.new
       harness.build_path = Pathname(dir)/"build"
@@ -88,8 +88,34 @@ class KandeloFormulaSupportTest < Minitest::Test
 
       assert wrapper.executable?
       assert_includes contents, "export PATH=#{harness.nix_path.dirname.to_s.shellescape}:"
+      assert_includes contents, "caller_pwd=$PWD"
       assert_includes contents, "cd /tmp/kandelo\\ root"
-      assert_includes contents, 'exec ./scripts/dev-shell.sh c++ "$@"'
+      assert_includes contents,
+                      'exec ./scripts/dev-shell.sh sh -c \'cd "$1"; shift; exec "$@"\' sh "$caller_pwd" c++ "$@"'
+    end
+  end
+
+  def test_host_tool_executes_from_the_caller_directory
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      root = Pathname(dir)/"kandelo root"
+      caller = Pathname(dir)/"formula build"
+      wrapper_dir = Pathname(dir)/"wrappers"
+      nix = Pathname(dir)/"nix profile/bin/nix"
+      [root/"scripts", caller, wrapper_dir, nix.dirname].each(&:mkpath)
+      (root/"scripts/dev-shell.sh").binwrite("#!/bin/sh\nexec \"$@\"\n")
+      nix.binwrite("#!/bin/sh\n")
+      File.chmod(0755, root/"scripts/dev-shell.sh")
+      File.chmod(0755, nix)
+
+      harness = Harness.new
+      harness.build_path = wrapper_dir
+      harness.nix_path = nix
+      harness.root_path = root.to_s
+      wrapper = harness.kandelo_host_tool("pwd")
+
+      output = Dir.chdir(caller) { IO.popen([wrapper.to_s], &:read) }
+
+      assert_equal "#{caller.realpath}\n", output
     end
   end
 
