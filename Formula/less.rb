@@ -22,7 +22,10 @@ class Less < Formula
       ENV["LDFLAGS"] = "-L#{ncurses}/lib"
 
       system kandelo_configure, *kandelo_std_configure_args, "--with-regex=posix"
-      system "make", "-j#{ENV.make_jobs}"
+      # Less compiles BINDIR and SYSDIR into the pager for system lesskey
+      # files. Use the stable opt path there while leaving the install target
+      # at the versioned keg configured above.
+      system "make", "-j#{ENV.make_jobs}", "bindir=#{opt_bin}", "sysconfdir=#{opt_prefix}/etc"
 
       instrumented = buildpath/"less.instrumented"
       system "#{root}/scripts/run-wasm-fork-instrument.sh", buildpath/"less", "-o", instrumented
@@ -67,6 +70,11 @@ class Less < Formula
     # The terminal implementation must come from the ncurses keg. This also
     # guards against restoring the registry recipe's fake termcap library.
     ncurses = formula_opt_prefix("automattic/kandelo-homebrew/ncurses")
-    assert_includes File.binread(bin/"less"), "#{ncurses}/share/terminfo"
+    less_bytes = File.binread(bin/"less")
+    assert_includes less_bytes, "#{ncurses}/share/terminfo"
+    assert_includes less_bytes, opt_prefix.to_s
+    [bin/"less", bin/"lesskey", bin/"lessecho"].each do |command|
+      refute_includes File.binread(command), prefix.to_s
+    end
   end
 end
