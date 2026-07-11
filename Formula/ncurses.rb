@@ -28,6 +28,7 @@ class Ncurses < Formula
 
   def install
     kandelo_require_arch!("wasm32")
+    root = Pathname(kandelo_require_root!)
     libcxx = formula_opt_prefix("automattic/kandelo-homebrew/libcxx")
     guest_opt_prefix = "/home/linuxbrew/.linuxbrew/opt/ncurses"
 
@@ -60,9 +61,32 @@ class Ncurses < Formula
     system host_tic, "-x", "-e", fallback_names.join(","), buildpath/"misc/terminfo.src"
     ENV.delete("TERMINFO")
 
-    kandelo_wasm_build do
-      ENV["CXXFLAGS"] = "-O2 -DNDEBUG -fexceptions -nostdinc++ -isystem #{libcxx}/include/c++/v1"
+    archive_builder_paths = []
+    kandelo_wasm_build do |sdk_root|
+      llvm_bin = ENV["LLVM_BIN"] || ENV["WASM_POSIX_LLVM_DIR"]
+      llvm_prefix = Pathname(llvm_bin).parent unless llvm_bin.to_s.empty?
+      stable_source = "/usr/src/ncurses-#{version}"
+      mapped_roots = {
+        buildpath.to_s => stable_source,
+        sdk_root.to_s  => "/usr/src/kandelo",
+        libcxx.to_s    => "/usr/src/libcxx",
+        "/nix/store"   => "/usr/src/toolchain",
+      }
+      mapped_roots[llvm_prefix.to_s] = "/usr/src/llvm" if llvm_prefix
+      prefix_maps = mapped_roots.flat_map do |from, to|
+        [
+          "-ffile-prefix-map=#{from}=#{to}",
+          "-fdebug-prefix-map=#{from}=#{to}",
+          "-fmacro-prefix-map=#{from}=#{to}",
+        ]
+      end
+      debug_flags = ["-fdebug-compilation-dir=#{stable_source}", *prefix_maps].join(" ")
+      ENV["CFLAGS"] = "-O2 #{debug_flags}"
+      ENV["CXXFLAGS"] = "-O2 -DNDEBUG -fexceptions -nostdinc++ -isystem #{libcxx}/include/c++/v1 #{debug_flags}"
+      archive_builder_paths = [buildpath, root, libcxx, llvm_prefix, prefix, opt_prefix].compact.map(&:to_s)
 
+      # ncurses probes LLVM ar with -U first, which preserves build-time member metadata.
+      ENV["cf_cv_ar_flags"] = "crD"
       ENV["cf_cv_func_mkstemp"] = "yes"
       ENV["cf_cv_func_nanosleep"] = "yes"
       ENV["cf_cv_link_funcs"] = "link symlink"
@@ -134,6 +158,11 @@ class Ncurses < Formula
       system "make", "install"
     end
 
+    verify_archive_paths!(
+      archive_builder_paths + ["/nix/store/", "/private/tmp/", "/private/var/", "/Users/"],
+      allowed_paths: [guest_opt_prefix],
+    )
+
     # Ship the full terminal database as data while retaining compiled-in
     # fallbacks for the common terminals used before a VFS has that data.
     (share/"terminfo").mkpath
@@ -175,6 +204,22 @@ class Ncurses < Formula
     bin.install_symlink "ncursesw6-config" => "ncurses6-config"
   end
 
+  def verify_archive_paths!(forbidden_paths, allowed_paths: [])
+    archives = lib.glob("*.a").reject(&:symlink?)
+    odie "ncurses installed no static archives" if archives.empty?
+
+    archives.each do |archive|
+      contents = File.binread(archive).b
+      allowed_paths.each { |path| contents = contents.gsub(path.to_s.b, "".b) }
+      forbidden_paths.uniq.each do |path|
+        marker = path.to_s.b
+        next if marker.empty? || contents.exclude?(marker)
+
+        odie "#{archive.basename} contains builder path #{path}"
+      end
+    end
+  end
+
   test do
     guest_opt_prefix = "/home/linuxbrew/.linuxbrew/opt/ncurses"
     assert_path_exists lib/"libncursesw.a"
@@ -199,10 +244,26 @@ class Ncurses < Formula
     assert_includes config_contents, %Q(echo "#{guest_opt_prefix}/share/terminfo:/usr/share/terminfo")
     refute_includes config_contents, "/nix/store/"
     refute_includes config_contents, prefix.to_s
-    refute_includes config_contents, opt_prefix.to_s
+    refute_includes config_contents, opt_prefix.to_s if opt_prefix.to_s != guest_opt_prefix
     assert_includes File.binread(lib/"libtinfow.a"), "#{guest_opt_prefix}/share/terminfo"
     refute_includes File.binread(lib/"libtinfow.a"), (prefix/"share/terminfo").to_s
-    refute_includes File.binread(lib/"libtinfow.a"), (opt_prefix/"share/terminfo").to_s
+    if opt_prefix.to_s != guest_opt_prefix
+      refute_includes File.binread(lib/"libtinfow.a"), (opt_prefix/"share/terminfo").to_s
+    end
+    verify_archive_paths!(
+      [
+        HOMEBREW_PREFIX.to_s,
+        Pathname(kandelo_require_root!).to_s,
+        prefix.to_s,
+        opt_prefix.to_s,
+        Dir.home,
+        "/nix/store/",
+        "/private/tmp/",
+        "/private/var/",
+        "/Users/",
+      ],
+      allowed_paths: [guest_opt_prefix],
+    )
     %w[form menu ncurses panel ncurses++].each do |name|
       assert_equal "lib#{name}w.a", (lib/"lib#{name}.a").readlink.to_s
       assert_equal "lib#{name}w_g.a", (lib/"lib#{name}_g.a").readlink.to_s
