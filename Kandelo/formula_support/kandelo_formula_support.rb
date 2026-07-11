@@ -7,9 +7,9 @@ require "shellwords"
 # KandeloFormulaSupport is the single place Kandelo-specific mechanics live so
 # that formula bodies stay idiomatic Homebrew. It owns SDK/toolchain activation
 # (via the HOMEBREW_KANDELO_ROOT env bridge), the wasm cross-compile
-# environment, the transitional shell-out to a registry build script, installing
-# a built `.wasm` as an executable, and running a `.wasm` under the Node kernel
-# host for `test do`.
+# environment, fork instrumentation, the transitional shell-out to a registry
+# build script, installing a built `.wasm` as an executable, and running a
+# `.wasm` under the Node kernel host for `test do`.
 #
 # See docs/plans/2026-07-05-homebrew-tap-layout-idiomatic-spec.md (Track A0) for
 # the contract this implements. The `kandelo_build_package` shell-out is the
@@ -129,6 +129,22 @@ module KandeloFormulaSupport
     ["--prefix=#{prefix}"]
   end
 
+  # Instrument a linked program in place when its normal runtime path can call
+  # fork(). The Kandelo checkout owns the ABI-coupled instrumentation tool.
+  def kandelo_fork_instrument(wasm_path)
+    root = kandelo_require_root!
+    wasm = Pathname(wasm_path)
+    instrumented = Pathname("#{wasm}.fork-instrumented")
+    instrumented.delete if instrumented.exist?
+
+    system "#{root}/scripts/run-wasm-fork-instrument.sh", wasm.to_s,
+           "-o", instrumented.to_s
+    instrumented.rename(wasm)
+    wasm
+  ensure
+    instrumented&.delete if instrumented&.exist?
+  end
+
   # Transitional Tier-2 bridge (spec §6 deviation): activate the SDK, export the
   # WASM_POSIX_DEP_* build-script contract, and shell out to the registry
   # `build-<name>.sh`. Returns the out dir the script installed into.
@@ -165,12 +181,14 @@ module KandeloFormulaSupport
   # Run a built `.wasm` under the Node kernel host and return its stdout. The
   # guest inherits the passed `env:`, matching how a real `brew test` exercises
   # behavior. `network: true` opts into Node's real external-TCP backend, while
-  # `preserve_argv0: true` keeps multicall command names such as gunzip, and
+  # `preserve_argv0: true` keeps multicall command names such as gunzip,
+  # `exec_programs:` stages explicit guest exec targets, `guest_files:` stages
+  # ordinary files in the guest VFS, and
   # `expected_status:` permits tests for specified nonzero results such as a
   # grep no-match status.
   def kandelo_run_wasm(
     bin_path, argv, env: {}, stdin: nil, merge_stderr: false, network: false,
-    preserve_argv0: false, expected_status: 0
+    preserve_argv0: false, exec_programs: {}, guest_files: {}, expected_status: 0
   )
     root = kandelo_require_root!
     if (node = ENV.fetch("HOMEBREW_KANDELO_NODE", nil)).to_s != ""
@@ -187,10 +205,14 @@ module KandeloFormulaSupport
 
     command = +"cd "
     command << Shellwords.escape(root) << " && "
-    isolated_runner = network || preserve_argv0
+    isolated_runner = network || preserve_argv0 || exec_programs.any? || guest_files.any?
     if isolated_runner
       guest_env = JSON.generate(env.transform_values(&:to_s))
+      guest_exec_programs = JSON.generate(exec_programs.transform_values(&:to_s))
+      staged_guest_files = JSON.generate(guest_files.transform_values(&:to_s))
       command << "KANDELO_FORMULA_GUEST_ENV_JSON=#{Shellwords.escape(guest_env)} "
+      command << "KANDELO_FORMULA_EXEC_PROGRAMS_JSON=#{Shellwords.escape(guest_exec_programs)} "
+      command << "KANDELO_FORMULA_GUEST_FILES_JSON=#{Shellwords.escape(staged_guest_files)} "
       command << "KANDELO_FORMULA_ENABLE_NETWORK=#{network ? 1 : 0} "
     else
       env.each { |key, value| command << "#{key}=#{Shellwords.escape(value.to_s)} " }
