@@ -1,0 +1,127 @@
+require_relative "../Kandelo/formula_support/kandelo_formula_support"
+
+class Unzip < Formula
+  include KandeloFormulaSupport
+
+  desc "Extraction utility for ZIP archives on Kandelo"
+  homepage "https://infozip.sourceforge.net/UnZip.html"
+  url "https://downloads.sourceforge.net/project/infozip/UnZip%206.x%20%28latest%29/UnZip%206.0/unzip60.tar.gz"
+  version "6.0"
+  sha256 "036d96991646d0449ed0aa952e4fbe21b476ce994abc276e49d30e686708bd37"
+  license "Info-ZIP"
+
+  skip_clean "bin/unzip"
+
+  # Upstream is unmaintained. Follow Homebrew's maintained formula and apply
+  # Ubuntu's security, correctness, and reproducibility fixes.
+  patch do
+    url "https://archive.ubuntu.com/ubuntu/pool/main/u/unzip/unzip_6.0-28ubuntu4.1.debian.tar.xz"
+    sha256 "d123c8e6972dbdd17ba1a4920fb57ed2ede9237dbae149dcbf55df829c77baf3"
+    apply %w[
+      patches/01-manpages-in-section-1-not-in-section-1l.patch
+      patches/02-this-is-debian-unzip.patch
+      patches/03-include-unistd-for-kfreebsd.patch
+      patches/04-handle-pkware-verification-bit.patch
+      patches/05-fix-uid-gid-handling.patch
+      patches/06-initialize-the-symlink-flag.patch
+      patches/07-increase-size-of-cfactorstr.patch
+      patches/08-allow-greater-hostver-values.patch
+      patches/09-cve-2014-8139-crc-overflow.patch
+      patches/10-cve-2014-8140-test-compr-eb.patch
+      patches/11-cve-2014-8141-getzip64data.patch
+      patches/12-cve-2014-9636-test-compr-eb.patch
+      patches/13-remove-build-date.patch
+      patches/14-cve-2015-7696.patch
+      patches/15-cve-2015-7697.patch
+      patches/16-fix-integer-underflow-csiz-decrypted.patch
+      patches/17-restore-unix-timestamps-accurately.patch
+      patches/18-cve-2014-9913-unzip-buffer-overflow.patch
+      patches/19-cve-2016-9844-zipinfo-buffer-overflow.patch
+      patches/20-cve-2018-1000035-unzip-buffer-overflow.patch
+      patches/20-unzip60-alt-iconv-utf8.patch
+      patches/21-fix-warning-messages-on-big-files.patch
+      patches/22-cve-2019-13232-fix-bug-in-undefer-input.patch
+      patches/23-cve-2019-13232-zip-bomb-with-overlapped-entries.patch
+      patches/24-cve-2019-13232-do-not-raise-alert-for-misplaced-central-directory.patch
+      patches/25-cve-2019-13232-fix-bug-in-uzbunzip2.patch
+      patches/26-cve-2019-13232-fix-bug-in-uzinflate.patch
+      patches/27-zipgrep-avoid-test-errors.patch
+      patches/28-cve-2022-0529-and-cve-2022-0530.patch
+    ]
+  end
+
+  def install
+    kandelo_require_arch!("wasm32")
+
+    kandelo_wasm_build do
+      cflags = %w[
+        -O2
+        -Wall
+        -I.
+        -DUNIX
+        -DSYSV
+        -DMODERN
+        -Dlinux
+        -DHAVE_UNISTD_H
+        -DHAVE_DIRENT_H
+        -DHAVE_TERMIOS_H
+        -DACORN_FTYPE_NFS
+        -DWILD_STOP_AT_DIR
+        -DLARGE_FILE_SUPPORT
+        -DUNICODE_SUPPORT
+        -DUNICODE_WCHAR
+        -DUTF8_MAYBE_NATIVE
+        -DNO_WORKING_ISPRINT
+        -DNO_LCHMOD
+        -DDATE_FORMAT=DF_YMD
+        -DIZ_HAVE_STRDUP
+        -DIZ_HAVE_STRCASECMP
+      ]
+      system "make", "-f", "unix/Makefile",
+        "CC=#{kandelo_cc}",
+        "CF=#{cflags.join(" ")}",
+        "LF2=",
+        "unzips"
+    end
+
+    kandelo_install_bin(buildpath, "unzip", "unzip")
+    bin.install_symlink "unzip" => "zipinfo"
+    bin.install_symlink "unzip" => "funzip"
+  end
+
+  test do
+    archive = testpath/"fixture.zip"
+    archive.binwrite(
+      "UEsDBBQAAAAIAAAAIVxY+qxoIAAAAMAEAAAJAAAAYWxwaGEudHh0S8wpyEhUSCvKz1XwTsxLSc3J50ocFRoV" \
+      "GhUaFRoKQgBQSwMEFAAAAAgAAAAhXJsvleEdAAAAYAMAAA8AAABuZXN0ZWQvYmV0YS50eHRLSi1JVEgrys9V" \
+      "8E7MS0nNyedKGhUZFRkVoZIIAFBLAQIeAxQAAAAIAAAAIVxY+qxoIAAAAMAEAAAJAAAAAAAAAAEAAACkgQAA" \
+      "AABhbHBoYS50eHRQSwECHgMUAAAACAAAACFcmy+V4R0AAABgAwAADwAAAAAAAAABAAAApIFHAAAAbmVzdGVk" \
+      "L2JldGEudHh0UEsFBgAAAAACAAIAdAAAAJEAAAAAAA==".unpack1("m0"),
+    )
+    cwd_env = { "KERNEL_CWD" => testpath }
+
+    listing = kandelo_run_wasm(bin/"unzip", ["-l", "fixture.zip"], env: cwd_env)
+    assert_match(/alpha\.txt/, listing)
+    assert_match(%r{nested/beta\.txt}, listing)
+    assert_match(/2 files/, listing)
+
+    extracted = testpath/"extracted"
+    extracted.mkpath
+    assert_empty kandelo_run_wasm(
+      bin/"unzip", ["-q", "fixture.zip", "-d", "extracted"], env: cwd_env
+    )
+    assert_equal "alpha from Kandelo\n" * 64, (extracted/"alpha.txt").read
+    assert_equal "beta from Kandelo\n" * 48, (extracted/"nested/beta.txt").read
+
+    assert_equal "alpha.txt\nnested/beta.txt\n", kandelo_run_wasm(
+      bin/"zipinfo", ["-1", "fixture.zip"], env: cwd_env, preserve_argv0: true
+    )
+    assert_equal "alpha from Kandelo\n" * 64,
+      kandelo_run_wasm(bin/"funzip", [], stdin: archive.binread, preserve_argv0: true)
+
+    missing = kandelo_run_wasm(
+      bin/"unzip", ["missing.zip"], env: cwd_env, merge_stderr: true, expected_status: 9
+    )
+    assert_match(/cannot find or open missing\.zip/, missing)
+  end
+end

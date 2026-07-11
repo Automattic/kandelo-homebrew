@@ -10,6 +10,8 @@ class Zip < Formula
   sha256 "f0e8bb1f9b7eb0b01285495a2699df3a4b766784c1765a8f1aeedf63c0806369"
   license "Info-ZIP"
 
+  depends_on "automattic/kandelo-homebrew/unzip"
+
   skip_clean "bin/zip"
 
   # Upstream is unmaintained. Follow Homebrew's maintained formula and apply
@@ -65,7 +67,10 @@ class Zip < Formula
     (inputs/"nested").mkpath
     (inputs/"alpha.txt").write("alpha from Kandelo\n")
     (inputs/"nested/beta.txt").write("beta from Kandelo\n")
-    cwd_env = { "KERNEL_CWD" => inputs }
+    unzip = inputs/"unzip"
+    unzip.binwrite((formula_opt_bin("automattic/kandelo-homebrew/unzip")/"unzip").binread)
+    unzip.chmod 0755
+    cwd_env = { "KERNEL_CWD" => inputs, "KERNEL_PATH" => inputs }
 
     assert_empty kandelo_run_wasm(
       bin/"zip", ["-q", "archive.zip", "alpha.txt", "nested/beta.txt"], env: cwd_env
@@ -76,6 +81,9 @@ class Zip < Formula
     assert_match(/^  alpha\.txt$/, listing)
     assert_match(%r{^  nested/beta\.txt$}, listing)
     assert_match(/Total 2 entries/, listing)
+
+    integrity = kandelo_run_wasm(bin/"zip", ["-T", "archive.zip"], env: cwd_env)
+    assert_match(/test of archive\.zip OK/, integrity)
 
     nothing_to_do = kandelo_run_wasm(
       bin/"zip", ["empty.zip"], env: cwd_env, merge_stderr: true, expected_status: 12

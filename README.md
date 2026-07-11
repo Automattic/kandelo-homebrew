@@ -42,7 +42,7 @@ Current migration controls and pilots include:
 - `gawk`, GNU's pattern scanning and text-processing language;
 - `file`, compression-aware file type identification backed by the complete
   `libmagic` database;
-- `zip`, Info-ZIP archive creation with maintained security fixes.
+- `zip` and `unzip`, the security-patched Info-ZIP creation, extraction, and inspection tools.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node
