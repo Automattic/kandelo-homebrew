@@ -15,6 +15,7 @@ class Gawk < Formula
   def install
     kandelo_require_arch!("wasm32")
 
+    guest_prefix = "/home/linuxbrew/.linuxbrew"
     instrumented = buildpath/"gawk.instrumented"
     kandelo_wasm_build do |root|
       # The SDK site owns target facts; these probes are specific to gnulib and gawk.
@@ -26,6 +27,8 @@ class Gawk < Formula
         "--disable-extensions",
         "--without-readline",
         "--without-mpfr",
+        "--datadir=#{guest_prefix}/share",
+        "--libdir=#{guest_prefix}/lib",
         "--disable-dependency-tracking"
       system "make", "-j#{ENV.make_jobs}"
       system "#{root}/scripts/run-wasm-fork-instrument.sh", buildpath/"gawk", "-o", instrumented
