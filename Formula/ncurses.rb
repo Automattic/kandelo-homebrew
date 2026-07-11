@@ -29,6 +29,7 @@ class Ncurses < Formula
   def install
     kandelo_require_arch!("wasm32")
     libcxx = formula_opt_prefix("automattic/kandelo-homebrew/libcxx")
+    guest_opt_prefix = "/home/linuxbrew/.linuxbrew/opt/ncurses"
 
     host_build = buildpath/"host-build"
     host_tic = host_build/"progs/tic"
@@ -85,8 +86,8 @@ class Ncurses < Formula
         "--without-shared",
         "--with-normal",
         "--disable-db-install",
-        "--with-default-terminfo-dir=#{opt_prefix}/share/terminfo",
-        "--with-terminfo-dirs=#{opt_prefix}/share/terminfo:/usr/share/terminfo",
+        "--with-default-terminfo-dir=#{guest_opt_prefix}/share/terminfo",
+        "--with-terminfo-dirs=#{guest_opt_prefix}/share/terminfo:/usr/share/terminfo",
         "--with-fallbacks=#{fallback_names.join(",")}",
         "--with-tic-path=#{host_tic}",
         "--with-infocmp-path=#{host_infocmp}",
@@ -159,12 +160,13 @@ class Ncurses < Formula
     build_shell = config_script.read.lines.first.delete_prefix("#!").strip
     inreplace config_script do |s|
       s.gsub! build_shell, "/bin/sh"
-      s.gsub! prefix.to_s, opt_prefix.to_s
+      s.gsub! prefix.to_s, guest_opt_prefix
     end
     bin.install_symlink "ncursesw6-config" => "ncurses6-config"
   end
 
   test do
+    guest_opt_prefix = "/home/linuxbrew/.linuxbrew/opt/ncurses"
     assert_path_exists lib/"libncursesw.a"
     assert_path_exists lib/"libncursesw_g.a"
     assert_path_exists lib/"libncurses++w.a"
@@ -180,15 +182,17 @@ class Ncurses < Formula
     assert_operator (share/"terminfo").glob("*/*").length, :>, 2_000
     config_contents = (bin/"ncursesw6-config").read
     assert_equal "#!/bin/sh\n", config_contents.lines.first
-    assert_includes config_contents, %Q(prefix="#{opt_prefix}")
+    assert_includes config_contents, %Q(prefix="#{guest_opt_prefix}")
     assert_includes config_contents, 'THIS="ncursesw"'
     assert_includes config_contents, 'TINFO_LIB="tinfow"'
     assert_includes config_contents, 'LIBS="-l${THIS} -l${TINFO_LIB} $LIBS"'
-    assert_includes config_contents, %Q(echo "#{opt_prefix}/share/terminfo:/usr/share/terminfo")
+    assert_includes config_contents, %Q(echo "#{guest_opt_prefix}/share/terminfo:/usr/share/terminfo")
     refute_includes config_contents, "/nix/store/"
     refute_includes config_contents, prefix.to_s
-    assert_includes File.binread(lib/"libtinfow.a"), "#{opt_prefix}/share/terminfo"
+    refute_includes config_contents, opt_prefix.to_s
+    assert_includes File.binread(lib/"libtinfow.a"), "#{guest_opt_prefix}/share/terminfo"
     refute_includes File.binread(lib/"libtinfow.a"), (prefix/"share/terminfo").to_s
+    refute_includes File.binread(lib/"libtinfow.a"), (opt_prefix/"share/terminfo").to_s
     %w[form menu ncurses panel ncurses++].each do |name|
       assert_equal "lib#{name}w.a", (lib/"lib#{name}.a").readlink.to_s
       assert_equal "lib#{name}w_g.a", (lib/"lib#{name}_g.a").readlink.to_s
@@ -270,13 +274,15 @@ class Ncurses < Formula
     assert_equal "ncurses-ok\n", kandelo_run_wasm(wasm, [], env: fallback_env)
     assert_equal "256\n", kandelo_run_wasm(bin/"tput", ["colors"], env: fallback_env)
 
-    # screen-256color is not compiled into the fallback table. Exercise both
-    # the normal configured search and the full database under the opt path.
-    database_env = { "HOME" => empty_home, "TERM" => "screen-256color" }
+    # screen-256color is not compiled into the fallback table. Exercise the
+    # full database explicitly; the string checks above verify its guest opt path.
+    database_env = {
+      "HOME"     => empty_home,
+      "TERM"     => "screen-256color",
+      "TERMINFO" => share/"terminfo",
+    }
     assert_equal "256\n", kandelo_run_wasm(bin/"tput", ["colors"], env: database_env)
     assert_match "ncurses #{version}", kandelo_run_wasm(bin/"infocmp", ["-V"], env: database_env)
-    opt_database_env = database_env.merge("TERMINFO" => opt_prefix/"share/terminfo")
-    assert_equal "256\n", kandelo_run_wasm(bin/"tput", ["colors"], env: opt_database_env)
 
     # Run the target tic inside Kandelo and read its output back through the
     # target utilities, proving the shipped compiler is functional.
