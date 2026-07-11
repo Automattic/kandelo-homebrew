@@ -108,6 +108,13 @@ class Ncurses < Formula
         inreplace makefile, /[[:space:]]-dynamic/, ""
       end
 
+      # MKfallback.sh uses GNU sed word boundaries, which Darwin sed leaves
+      # unchanged. Keep its generated numeric table aligned with the target's
+      # 32-bit NCURSES_INT2 layout when extended colors are enabled.
+      inreplace buildpath/"ncurses/tinfo/MKfallback.sh",
+        's/\<short\>/NCURSES_INT2/g',
+        "s/static short /static NCURSES_INT2 /g"
+
       fallback_command = [
         "TERMINFO=#{terminfo_build.to_s.shellescape}",
         "bash", "-e", (buildpath/"ncurses/tinfo/MKfallback.sh").to_s.shellescape,
@@ -119,6 +126,9 @@ class Ncurses < Formula
         ">", (buildpath/"ncurses/fallback.c").to_s.shellescape
       ].join(" ")
       system "bash", "-c", fallback_command
+      fallback_source = buildpath/"ncurses/fallback.c"
+      odie "fallback numeric table has the wrong target width" unless
+        fallback_source.read.include?("static NCURSES_INT2 xterm_256color_number_data[]")
 
       system "make", jobs
       system "make", "install"
