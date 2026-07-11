@@ -19,9 +19,10 @@ class Patch < Formula
     kandelo_wasm_build do |root|
       # The SDK site owns target facts; this gnulib runtime probe is package-specific.
       ENV["gl_cv_func_strerror_0_works"] = "yes"
+      # Resolve the external editor from the guest PATH, not the build host.
+      ENV["ac_cv_path_ED"] = "ed"
 
       system kandelo_configure, *kandelo_std_configure_args,
-        "--disable-nls",
         "--disable-xattr",
         "--disable-dependency-tracking"
       system "make", "-j#{ENV.make_jobs}"
@@ -29,7 +30,7 @@ class Patch < Formula
     end
 
     kandelo_install_bin(buildpath/"src", "patch.instrumented", "patch")
-    man1.install buildpath/"src/patch.1"
+    man1.install buildpath/"patch.man" => "patch.1"
   end
 
   test do
@@ -95,5 +96,47 @@ class Patch < Formula
     assert_match(/1 out of 1 hunk FAILED/, failure)
     assert_match(/missing/, (workspace/"failed.rej").read)
     assert_equal "alpha\nbeta\ngamma\n", (project/"notes.txt").read
+
+    editor_source = testpath/"ed-fixture.c"
+    editor = workspace/"ed"
+    editor_source.write <<~C
+      #include <stdio.h>
+      #include <string.h>
+
+      int main(int argc, char **argv) {
+        const char *path;
+        char line[256];
+        int appending = 0;
+        FILE *output;
+
+        if (argc < 2) return 1;
+        path = strcmp(argv[1], "-") == 0 && argc > 2 ? argv[2] : argv[1];
+        output = fopen(path, "a");
+        if (output == NULL) return 2;
+        while (fgets(line, sizeof(line), stdin) != NULL) {
+          if (strcmp(line, "a\\n") == 0) {
+            appending = 1;
+          } else if (appending && strcmp(line, ".\\n") == 0) {
+            appending = 0;
+          } else if (appending && fputs(line, output) == EOF) {
+            return 3;
+          }
+        }
+        return fclose(output) == 0 ? 0 : 4;
+      }
+    C
+    kandelo_wasm_build do
+      system kandelo_cc, editor_source, "-o", editor
+    end
+    editor.chmod 0755
+
+    (workspace/"ed-target.txt").write("one\n")
+    kandelo_run_wasm(
+      bin/"patch",
+      ["--batch", "--silent", "-e", "ed-target.txt"],
+      env:   { "KERNEL_CWD" => workspace, "KERNEL_PATH" => workspace },
+      stdin: "a\ntwo\n.\n",
+    )
+    assert_equal "one\ntwo\n", (workspace/"ed-target.txt").read
   end
 end
