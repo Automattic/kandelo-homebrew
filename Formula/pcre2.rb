@@ -1,0 +1,200 @@
+require_relative "../Kandelo/formula_support/kandelo_formula_support"
+
+class Pcre2 < Formula
+  include KandeloFormulaSupport
+
+  desc "Perl-compatible regular expression library and tools for Kandelo"
+  homepage "https://www.pcre.org/"
+  url "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.44/pcre2-10.44.tar.gz"
+  sha256 "86b9cb0aa3bcb7994faa88018292bc704cdbb708e785f7c74352ff6ea7d3175b"
+  license "BSD-3-Clause"
+
+  depends_on "binaryen" => :build
+  depends_on "pkgconf" => :build
+  depends_on "wabt" => :build
+
+  skip_clean "bin", "lib/libpcre2-8.a", "lib/libpcre2-16.a", "lib/libpcre2-32.a",
+             "lib/libpcre2-posix.a"
+
+  def install
+    kandelo_require_arch!("wasm32")
+
+    kandelo_wasm_build do |root|
+      ENV["CFLAGS"] = "-O2 -gline-tables-only -fdebug-compilation-dir=."
+
+      system kandelo_configure(root), *kandelo_std_configure_args,
+        "--disable-shared",
+        "--enable-static",
+        "--enable-pcre2-16",
+        "--enable-pcre2-32",
+        "--enable-unicode",
+        "--disable-jit",
+        "--disable-pcre2grep-libz",
+        "--disable-pcre2grep-libbz2",
+        "--disable-pcre2test-libedit",
+        "--disable-pcre2test-libreadline",
+        "--disable-dependency-tracking"
+      system "make", "-j#{ENV.make_jobs}"
+
+      pcre2grep = buildpath/"pcre2grep"
+      instrumented = buildpath/"pcre2grep.instrumented"
+      system "#{root}/scripts/run-wasm-fork-instrument.sh", pcre2grep, "-o", instrumented
+
+      artifact_guards = "#{root}/scripts/wasm-artifact-guards.sh"
+      pcre2test = buildpath/"pcre2test"
+      system "bash", "-c", <<~SH
+        set -euo pipefail
+        . #{artifact_guards.shellescape}
+        expected_abi=$(wasm_current_abi_version #{root.to_s.shellescape})
+        if [ -z "$expected_abi" ]; then
+          echo "ERROR: could not determine Kandelo ABI" >&2
+          exit 1
+        fi
+        for artifact in #{instrumented.to_s.shellescape} #{pcre2test.to_s.shellescape}; do
+          artifact_abi=$(wasm_extract_abi_version "$artifact")
+          if [ "$artifact_abi" != "$expected_abi" ]; then
+            echo "ERROR: PCRE2 ABI $artifact_abi does not match Kandelo ABI $expected_abi" >&2
+            exit 1
+          fi
+          wasm_require_no_legacy_asyncify "$artifact"
+        done
+        if ! wasm_has_complete_fork_instrumentation #{instrumented.to_s.shellescape}; then
+          echo "ERROR: pcre2grep has incomplete fork instrumentation" >&2
+          exit 1
+        fi
+        wasm_require_fork_instrumentation_if_needed #{pcre2test.to_s.shellescape}
+      SH
+      mv instrumented, pcre2grep
+
+      system "make", "install"
+    end
+  end
+
+  test do
+    %w[8 16 32].each do |width|
+      assert_path_exists lib/"libpcre2-#{width}.a"
+      assert_path_exists lib/"pkgconfig/libpcre2-#{width}.pc"
+    end
+    assert_path_exists lib/"libpcre2-posix.a"
+    assert_path_exists lib/"pkgconfig/libpcre2-posix.pc"
+    assert_path_exists include/"pcre2.h"
+    assert_path_exists include/"pcre2posix.h"
+    assert_path_exists bin/"pcre2grep"
+    assert_path_exists bin/"pcre2test"
+
+    version_output = kandelo_run_wasm(bin/"pcre2grep", ["--version"])
+    assert_match(/pcre2grep version 10\.44/, version_output)
+
+    config_output = kandelo_run_wasm(bin/"pcre2test", ["-C"])
+    assert_match(/PCRE2 version 10\.44/, config_output)
+    assert_match(/8-bit, 16-bit and 32-bit support/, config_output)
+    assert_match(/Unicode support/, config_output)
+    assert_match(/JIT support: no/, config_output)
+
+    unicode_input = "Gr\u00fc\u00dfe\u{1F680}\n123\u{1F680}\n\u6771\u4eac\u{1F680}\n"
+    assert_equal "Gr\u00fc\u00dfe\n\u6771\u4eac\n", kandelo_run_wasm(
+      bin/"pcre2grep", ["-u", "-o1", "^(\\p{L}+)\\x{1F680}$"], stdin: unicode_input
+    )
+
+    callout_pattern = 'abc(?C"/bin/sh|-c|printf callout-ok")'
+    assert_equal "callout-okabc\n", kandelo_run_wasm(
+      bin/"pcre2grep", [callout_pattern], stdin: "abc\n"
+    )
+
+    source = testpath/"pcre2-consumer.c"
+    wasm = testpath/"pcre2-consumer.wasm"
+    source.write <<~C
+      #define PCRE2_CODE_UNIT_WIDTH 8
+      #include <pcre2.h>
+      #include <pcre2posix.h>
+      #include <stdint.h>
+      #include <stdio.h>
+      #include <string.h>
+
+      int main(void) {
+        static const PCRE2_UCHAR pattern[] =
+          "^(?<word>\\\\p{L}+)\\\\x{1F680}$";
+        static const PCRE2_UCHAR subject[] =
+          "Gr\\xc3\\xbc\\xc3\\x9f" "e\\xf0\\x9f\\x9a\\x80";
+        int error_code;
+        int unicode = 0;
+        PCRE2_SIZE error_offset;
+        pcre2_code *code;
+        pcre2_match_data *match_data;
+        PCRE2_SIZE *ovector;
+        regex_t posix;
+
+        if (pcre2_config(PCRE2_CONFIG_UNICODE, &unicode) != 0 || unicode != 1) return 1;
+        code = pcre2_compile(pattern, PCRE2_ZERO_TERMINATED, PCRE2_UTF | PCRE2_UCP,
+          &error_code, &error_offset, NULL);
+        if (code == NULL) return 2;
+        match_data = pcre2_match_data_create_from_pattern(code, NULL);
+        if (match_data == NULL) return 3;
+        if (pcre2_match(code, subject, PCRE2_ZERO_TERMINATED, 0, 0, match_data, NULL) != 2) return 4;
+        ovector = pcre2_get_ovector_pointer(match_data);
+        if (ovector[0] != 0 || ovector[1] != 11 || ovector[2] != 0 || ovector[3] != 7) return 5;
+
+        if (regcomp(&posix, "^Kandelo[[:space:]][0-9]+$", REG_EXTENDED) != 0) return 6;
+        if (regexec(&posix, "Kandelo 2026", 0, NULL, 0) != 0) return 7;
+        regfree(&posix);
+        pcre2_match_data_free(match_data);
+        pcre2_code_free(code);
+        puts("pcre2-unicode-ok:0-7");
+        return 0;
+      }
+    C
+
+    kandelo_wasm_build do
+      ENV["PKG_CONFIG_LIBDIR"] = lib/"pkgconfig"
+      ENV.delete("PKG_CONFIG_PATH")
+      ENV.delete("PKG_CONFIG_SYSROOT_DIR")
+      pkgconf = formula_opt_bin("pkgconf")/"pkg-config"
+      flags = shell_output("#{pkgconf} --static --cflags --libs libpcre2-posix").split
+      %w[-lpcre2-posix -lpcre2-8].each { |flag| assert_includes flags, flag }
+      system kandelo_cc, source, *flags, "-o", wasm
+    end
+    assert_equal "pcre2-unicode-ok:0-7\n", kandelo_run_wasm(wasm, [])
+
+    %w[16 32].each do |width|
+      width_source = testpath/"pcre2-#{width}-consumer.c"
+      width_wasm = testpath/"pcre2-#{width}-consumer.wasm"
+      width_source.write <<~C
+        #define PCRE2_CODE_UNIT_WIDTH #{width}
+        #include <pcre2.h>
+        #include <stdio.h>
+
+        int main(void) {
+          static const PCRE2_UCHAR pattern[] = {'^', 'K', '$', 0};
+          static const PCRE2_UCHAR subject[] = {'K', 0};
+          int error_code;
+          int unicode = 0;
+          PCRE2_SIZE error_offset;
+          pcre2_code *code;
+          pcre2_match_data *match_data;
+
+          if (pcre2_config(PCRE2_CONFIG_UNICODE, &unicode) != 0 || unicode != 1) return 1;
+          code = pcre2_compile(pattern, PCRE2_ZERO_TERMINATED, PCRE2_UTF,
+            &error_code, &error_offset, NULL);
+          if (code == NULL) return 2;
+          match_data = pcre2_match_data_create_from_pattern(code, NULL);
+          if (match_data == NULL) return 3;
+          if (pcre2_match(code, subject, 1, 0, 0, match_data, NULL) != 1) return 4;
+          pcre2_match_data_free(match_data);
+          pcre2_code_free(code);
+          puts("pcre2-#{width}-ok");
+          return 0;
+        }
+      C
+      kandelo_wasm_build do
+        ENV["PKG_CONFIG_LIBDIR"] = lib/"pkgconfig"
+        ENV.delete("PKG_CONFIG_PATH")
+        ENV.delete("PKG_CONFIG_SYSROOT_DIR")
+        pkgconf = formula_opt_bin("pkgconf")/"pkg-config"
+        flags = shell_output("#{pkgconf} --static --cflags --libs libpcre2-#{width}").split
+        assert_includes flags, "-lpcre2-#{width}"
+        system kandelo_cc, width_source, *flags, "-o", width_wasm
+      end
+      assert_equal "pcre2-#{width}-ok\n", kandelo_run_wasm(width_wasm, [])
+    end
+  end
+end
