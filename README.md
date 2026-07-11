@@ -63,6 +63,7 @@ Current migration controls and pilots include:
 - `ctags`, Universal Ctags' maintained tag generator, `readtags` query client,
   and optscript interpreter with complete C and C++ workflows.
 - `tar`, the GNU archive creation and extraction CLI.
+- `wget`, GNU HTTP and HTTPS retrieval linked against the tap TLS and compression roots.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node
