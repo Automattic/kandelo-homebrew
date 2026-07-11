@@ -106,10 +106,11 @@ module KandeloFormulaSupport
   # Return a wrapper for a native build tool from Kandelo's canonical dev
   # shell. Homebrew's compiler shims include Formula dependency paths, so a
   # cross Formula that depends on target libcxx cannot use those shims for host
-  # generators. The wrapper changes to the Kandelo checkout before evaluating
-  # its flake; callers must pass absolute source and build paths. Wrap the
-  # highest-level build driver practical so a multi-file native phase enters
-  # the dev shell once rather than once per compiler invocation.
+  # generators. The wrapper changes to the Kandelo checkout while evaluating
+  # its flake, then restores the Formula caller's working directory before
+  # executing the tool. Wrap the highest-level build driver practical so a
+  # multi-file native phase enters the dev shell once rather than once per
+  # compiler invocation.
   def kandelo_host_tool(name)
     odie "invalid host tool name: #{name}" unless name.match?(/\A[+._a-z0-9-]+\z/i)
 
@@ -123,8 +124,9 @@ module KandeloFormulaSupport
       #!/bin/sh
       set -eu
       export PATH=#{nix.dirname.to_s.shellescape}:/usr/bin:/bin
+      caller_pwd=$PWD
       cd #{root.shellescape}
-      exec ./scripts/dev-shell.sh #{name} "$@"
+      exec ./scripts/dev-shell.sh sh -c 'cd "$1"; shift; exec "$@"' sh "$caller_pwd" #{name} "$@"
     SH
     File.chmod(0755, wrapper)
     wrapper
