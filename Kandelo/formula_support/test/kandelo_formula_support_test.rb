@@ -149,6 +149,62 @@ class KandeloFormulaSupportTest < Minitest::Test
     refute_includes harness.command, "KANDELO_FORMULA_ENABLE_NETWORK="
   end
 
+  def test_kms_execution_uses_stats_runner_and_removes_stale_host_dist
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      root = Pathname(dir)/"kandelo root"
+      host_dist = root/"host/dist"
+      host_dist.mkpath
+      (host_dist/"stale.js").binwrite("stale")
+      command = Pathname(dir)/"modeset"
+      command.binwrite("\0asm")
+
+      harness = Harness.new
+      harness.root_path = root.to_s
+      harness.test_path = Pathname(dir)/"formula test"
+      harness.test_path.mkpath
+      output = harness.kandelo_run_kms_wasm(
+        command, argv: ["modeset", "--demo"], min_page_flips: 3, timeout_ms: 4_000
+      )
+
+      assert_equal "runtime-ok\n", output
+      assert_includes harness.command, "run-kms-wasm.ts"
+      assert_includes harness.command, root.to_s.shellescape
+      assert_includes harness.command, "modeset.kms.wasm"
+      assert_includes harness.command, "modeset"
+      assert_includes harness.command, "--demo"
+      assert_includes harness.command, "3 4000"
+      assert_equal "kandelo_run_kms_wasm", harness.recorded_launcher
+      refute_path_exists host_dist
+    end
+  end
+
+  def test_kms_browser_execution_uses_focused_chromium_runner_and_removes_stale_host_dist
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      root = Pathname(dir)/"kandelo root"
+      host_dist = root/"host/dist"
+      host_dist.mkpath
+      (host_dist/"stale.js").binwrite("stale")
+      command = Pathname(dir)/"modeset"
+      command.binwrite("\0asm")
+
+      harness = Harness.new
+      harness.root_path = root.to_s
+      output = harness.kandelo_run_kms_browser_wasm(
+        command, argv: ["modeset", "--demo"], min_page_flips: 4, timeout_ms: 5_000
+      )
+
+      assert_equal "runtime-ok\n", output
+      assert_includes harness.command, "run-kms-browser-wasm.ts"
+      assert_includes harness.command, root.to_s.shellescape
+      assert_includes harness.command, command.to_s
+      assert_includes harness.command, "minPageFlips"
+      assert_includes harness.command, "timeoutMs"
+      assert_includes harness.command, "modeset"
+      assert_includes harness.command, "--demo"
+      refute_path_exists host_dist
+    end
+  end
+
   def test_execution_accepts_explicit_guest_exec_programs
     harness = Harness.new
 
