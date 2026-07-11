@@ -330,6 +330,66 @@ module KandeloFormulaSupport
     output
   end
 
+  # Run a long-lived DRM/KMS program until it has completed real PAGE_FLIP
+  # commits. The runner attaches the kernel's KMS stats channel before spawn,
+  # so this verifies the guest libdrm path without requiring a Node canvas.
+  # Browser/WebGL rendering remains a separate Chromium validation gate.
+  def kandelo_run_kms_wasm(bin_path, argv: [], min_page_flips: 2, timeout_ms: 30_000)
+    root = kandelo_require_root!
+    if (node = ENV.fetch("HOMEBREW_KANDELO_NODE", nil)).to_s != ""
+      ENV.prepend_path "PATH", File.dirname(node)
+    end
+
+    wasm_path = Pathname(bin_path)
+    if wasm_path.extname != ".wasm"
+      staged_wasm = testpath/"#{wasm_path.basename}.kms.wasm"
+      File.binwrite(staged_wasm, File.binread(wasm_path))
+      wasm_path = staged_wasm
+    end
+
+    # Compiled host output shadows TypeScript source under tsx. KMS tests must
+    # exercise the checkout supplied by HOMEBREW_KANDELO_ROOT.
+    FileUtils.rm_rf(Pathname(root)/"host/dist")
+
+    runner = Pathname(__dir__)/"run-kms-wasm.ts"
+    command = [
+      "node", "--experimental-wasm-exnref", "--import", "tsx/esm",
+      runner, root, wasm_path, JSON.generate(argv.map(&:to_s)), min_page_flips, timeout_ms,
+    ].map { |arg| Shellwords.escape(arg.to_s) }.join(" ")
+    output = shell_output("cd #{Shellwords.escape(root)} && #{command} < /dev/null")
+    kandelo_record_node_execution!(wasm_path, argv, launcher: "kandelo_run_kms_wasm")
+    output
+  end
+
+  # Run a DRM/KMS program through the browser host with a real transferred
+  # OffscreenCanvas. The focused page attaches the canvas before spawning the
+  # guest, waits for kernel PAGE_FLIP telemetry, and the runner verifies that
+  # Chromium composed nonuniform pixels from the WebGL-owned canvas.
+  def kandelo_run_kms_browser_wasm(bin_path, argv: [], min_page_flips: 2, timeout_ms: 60_000)
+    root = kandelo_require_root!
+    if (node = ENV.fetch("HOMEBREW_KANDELO_NODE", nil)).to_s != ""
+      ENV.prepend_path "PATH", File.dirname(node)
+    end
+
+    config = JSON.generate({
+      argv:         argv.map(&:to_s),
+      minPageFlips: min_page_flips,
+      timeoutMs:    timeout_ms,
+    })
+
+    # Compiled host output shadows TypeScript source under tsx. Browser formula
+    # tests must exercise the checkout supplied by HOMEBREW_KANDELO_ROOT.
+    FileUtils.rm_rf(Pathname(root)/"host/dist")
+
+    runner = Pathname(__dir__)/"run-kms-browser-wasm.ts"
+    command = [
+      "node", "--experimental-wasm-exnref", "--import", "tsx/esm",
+      runner, root, Pathname(bin_path), config,
+    ].map { |arg| Shellwords.escape(arg.to_s) }.join(" ")
+
+    shell_output("cd #{Shellwords.escape(root)} && #{command} < /dev/null")
+  end
+
   def kandelo_record_node_execution!(wasm_path, argv, launcher: "kandelo_run_wasm")
     receipt = ENV.fetch("HOMEBREW_KANDELO_NODE_RECEIPT_PATH", nil)
     return if receipt.to_s.empty?
