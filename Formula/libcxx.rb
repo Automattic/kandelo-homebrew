@@ -24,7 +24,15 @@ class Libcxx < Formula
     pointer_size = (kandelo_arch == "wasm64") ? 8 : 4
 
     kandelo_wasm_build do |root|
-      cflags = "-O2 -DNDEBUG -fexceptions"
+      prefix_maps = [
+        "-ffile-prefix-map=#{buildpath}=/usr/src/libcxx",
+        "-fdebug-prefix-map=#{buildpath}=/usr/src/libcxx",
+        "-fmacro-prefix-map=#{buildpath}=/usr/src/libcxx",
+        "-ffile-prefix-map=#{root}=/usr/src/kandelo",
+        "-fdebug-prefix-map=#{root}=/usr/src/kandelo",
+        "-fmacro-prefix-map=#{root}=/usr/src/kandelo",
+      ]
+      cflags = "-O2 -DNDEBUG -fexceptions #{prefix_maps.join(" ")}"
 
       # Kandelo executables allow unresolved kernel imports, so CMake's
       # check_library_exists cannot distinguish a missing target symbol from a
@@ -136,6 +144,7 @@ class Libcxx < Formula
   end
 
   test do
+    root = kandelo_require_root!
     assert_path_exists lib/"libc++.a"
     assert_path_exists lib/"libc++abi.a"
     assert_path_exists lib/"libc++experimental.a"
@@ -143,6 +152,18 @@ class Libcxx < Formula
     assert_path_exists include/"libunwind.h"
     assert_path_exists include/"unwind.h"
     refute_path_exists lib/"libunwind.a"
+
+    builder_path_markers = %w[/private/tmp/ /nix/store/]
+    %w[libc++.a libc++abi.a libc++experimental.a].each do |archive|
+      binary = File.binread(lib/archive)
+      builder_path_markers.each do |marker|
+        refute binary.include?(marker), "#{archive} contains builder path marker #{marker}"
+      end
+      refute binary.match?(%r{/Users/[^/]+/}), "#{archive} contains a builder home path"
+      refute binary.match?(%r{/tmp/libcxx-[^/]+/}), "#{archive} contains a Linux build path"
+      refute binary.include?(root), "#{archive} contains the Kandelo checkout path"
+      refute binary.include?(prefix.to_s), "#{archive} contains its Homebrew Cellar path"
+    end
 
     source = testpath/"libcxx-smoke.cpp"
     wasm = testpath/"libcxx-smoke.wasm"
