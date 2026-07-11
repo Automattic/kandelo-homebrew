@@ -1,0 +1,39 @@
+diff --git a/ext/Errno/Errno_pm.PL b/ext/Errno/Errno_pm.PL
+index 63a2f44..0debb66 100644
+--- a/ext/Errno/Errno_pm.PL
++++ b/ext/Errno/Errno_pm.PL
+@@ -101,6 +101,6 @@ sub get_files {
+     my @file;
+     # When cross-compiling we may store a path for gcc's "sysroot" option:
+-    my $sysroot = $Config{sysroot} || '';
++    my $sysroot = $ENV{WASM_POSIX_SYSROOT} || $Config{sysroot} || '';
+     my $linux_errno_h;
+     if ($^O eq 'linux') {
+ 	# Some Linuxes have weird errno.hs which generate
+@@ -106,7 +106,7 @@ sub get_files {
+ 	# Some Linuxes have weird errno.hs which generate
+ 	# no #file or #line directives
+ 	($linux_errno_h) = grep { -e $_ } map { "$_/errno.h" }
+-	    "$sysroot/usr/include", "$sysroot/usr/local/include",
++	    "$sysroot/include", "$sysroot/usr/include", "$sysroot/usr/local/include",
+ 	    split / / => $Config{locincpth};
+     }
+ 
+@@ -185,6 +185,17 @@ sub get_files {
+ 	}
+ 	close(CPPO);
+     }
++
++	# Cross builds run this generator with native miniperl, so $^O describes
++	# the build host rather than the target. perl-cross also configures cpp
++	# with -P, which suppresses the line markers used above to discover the
++	# target headers. Fall back to the explicit sysroot headers; musl keeps
++	# the E* definitions in bits/errno.h, which native miniperl can parse.
++	if (!@file && $sysroot) {
++	    push @file, grep { -f $_ }
++		"$sysroot/include/errno.h",
++		"$sysroot/include/bits/errno.h";
++	}
+     return uniq(@file);
+ }
+ 
