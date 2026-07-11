@@ -13,7 +13,7 @@ class KandeloFormulaSupportTest < Minitest::Test
   class Harness
     include KandeloFormulaSupport
 
-    attr_accessor :test_path
+    attr_accessor :build_path, :nix_path, :test_path
     attr_reader :command, :expected_status, :system_args
 
     def kandelo_require_root!
@@ -22,6 +22,14 @@ class KandeloFormulaSupportTest < Minitest::Test
 
     def testpath
       test_path || Pathname("/tmp/formula test")
+    end
+
+    def buildpath
+      build_path || testpath
+    end
+
+    def kandelo_nix_executable
+      nix_path || super
     end
 
     def shell_output(command, expected_status = 0)
@@ -62,6 +70,26 @@ class KandeloFormulaSupportTest < Minitest::Test
       assert_equal "/tmp/kandelo root/scripts/run-wasm-fork-instrument.sh", harness.system_args.first
       assert_equal [wasm.to_s, "-o", "#{wasm}.fork-instrumented"], harness.system_args.drop(1)
       refute File.exist?("#{wasm}.fork-instrumented")
+    end
+  end
+
+  def test_host_tool_reenters_the_dev_shell_from_the_kandelo_root
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      harness = Harness.new
+      harness.build_path = Pathname(dir)/"build"
+      harness.build_path.mkpath
+      harness.nix_path = Pathname(dir)/"nix profile/bin/nix"
+      harness.nix_path.dirname.mkpath
+      harness.nix_path.binwrite("#!/bin/sh\n")
+      File.chmod(0755, harness.nix_path)
+
+      wrapper = harness.kandelo_host_cxx
+      contents = wrapper.read
+
+      assert wrapper.executable?
+      assert_includes contents, "export PATH=#{harness.nix_path.dirname.to_s.shellescape}:"
+      assert_includes contents, "cd /tmp/kandelo\\ root"
+      assert_includes contents, 'exec ./scripts/dev-shell.sh c++ "$@"'
     end
   end
 
