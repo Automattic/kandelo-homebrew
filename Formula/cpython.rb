@@ -10,7 +10,7 @@ class Cpython < Formula
   license "Python-2.0"
 
   depends_on "binaryen" => :build
-  depends_on "pkgconf" => :build
+  depends_on "pkgconf" => [:build, :test]
   depends_on "wabt" => :build
   depends_on "automattic/kandelo-homebrew/zlib"
 
@@ -234,6 +234,26 @@ class Cpython < Formula
         flag.gsub(GUEST_OPT_PREFIX, prefix.to_s).gsub(GUEST_ZLIB_PREFIX, zlib.to_s)
       end
     end
+    pkgconf = formula_opt_bin("pkgconf")/"pkg-config"
+    pkgconfig_flags = kandelo_wasm_build do
+      ENV["PKG_CONFIG_LIBDIR"] = (lib/"pkgconfig").to_s
+      ENV.delete("PKG_CONFIG_PATH")
+      ENV.delete("PKG_CONFIG_SYSROOT_DIR")
+      shell_output("#{pkgconf} --static --cflags --libs python3-embed").strip
+    end
+    %W[
+      -I#{GUEST_OPT_PREFIX}/include/python3.13
+      -L#{GUEST_OPT_PREFIX}/lib
+      -lpython3.13
+      -lresolv
+      -ldl
+      -lmpdec
+      -lHacl_Hash_SHA2
+      -lexpat
+      -L#{GUEST_ZLIB_PREFIX}/lib
+      -lz
+      -lm
+    ].each { |flag| assert_includes Shellwords.split(pkgconfig_flags), flag }
 
     embed_source = testpath/"embed-smoke.c"
     embed_source.write <<~C
@@ -254,6 +274,14 @@ class Cpython < Formula
       kandelo_fork_instrument(embed_wasm)
     end
     assert_equal "embed-ok\n", kandelo_run_wasm(embed_wasm, [], env: env)
+
+    pkgconfig_embed_wasm = testpath/"embed-pkgconfig-smoke.wasm"
+    kandelo_wasm_build do
+      system "wasm32posix-cc", embed_source,
+        *translate_guest_paths.call(pkgconfig_flags), "-o", pkgconfig_embed_wasm
+      kandelo_fork_instrument(pkgconfig_embed_wasm)
+    end
+    assert_equal "embed-ok\n", kandelo_run_wasm(pkgconfig_embed_wasm, [], env: env)
 
     runtime_script = <<~PYTHON
       import array
