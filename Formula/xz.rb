@@ -21,6 +21,7 @@ class Xz < Formula
     kandelo_require_arch!("wasm32")
 
     kandelo_wasm_build do
+      ENV["CFLAGS"] = "-O2 -fPIC"
       ENV["ac_cv_func_closedir_void"] = "no"
       ENV["ac_cv_func_malloc_0_nonnull"] = "yes"
       ENV["ac_cv_func_realloc_0_nonnull"] = "yes"
@@ -64,6 +65,10 @@ class Xz < Formula
 
     source = testpath/"liblzma-smoke.c"
     wasm = testpath/"liblzma-smoke.wasm"
+    plugin_source = testpath/"liblzma-plugin.c"
+    plugin = testpath/"liblzma-plugin.so"
+    loader_source = testpath/"liblzma-loader.c"
+    loader = testpath/"liblzma-loader.wasm"
     source.write <<~C
       #include <lzma.h>
       #include <stdio.h>
@@ -105,6 +110,43 @@ class Xz < Formula
         return 0;
       }
     C
+    plugin_source.write <<~C
+      #include <lzma.h>
+
+      const char *kandelo_liblzma_version(void) {
+        return lzma_version_string();
+      }
+    C
+    loader_source.write <<~C
+      #include <dlfcn.h>
+      #include <stdio.h>
+      #include <stdlib.h>
+
+      typedef const char *(*version_fn)(void);
+
+      int main(int argc, char **argv) {
+        void *handle;
+        void *allocation;
+        version_fn version;
+
+        if (argc != 2) return 2;
+        allocation = calloc(1, 1);
+        if (allocation == NULL) return 5;
+        free(allocation);
+        handle = dlopen(argv[1], RTLD_NOW);
+        if (handle == NULL) {
+          fprintf(stderr, "dlopen: %s\\n", dlerror());
+          return 3;
+        }
+        version = (version_fn)dlsym(handle, "kandelo_liblzma_version");
+        if (version == NULL) {
+          fprintf(stderr, "dlsym: %s\\n", dlerror());
+          return 4;
+        }
+        printf("liblzma-side-module %s ok\\n", version());
+        return 0;
+      }
+    C
     kandelo_wasm_build do
       ENV["PKG_CONFIG_LIBDIR"] = (lib/"pkgconfig").to_s
       ENV.delete("PKG_CONFIG_PATH")
@@ -114,9 +156,15 @@ class Xz < Formula
         Utils.safe_popen_read(pkgconf, "--variable=prefix", "liblzma").strip
       flags = Utils.safe_popen_read(pkgconf, "--static", "--cflags", "--libs", "liblzma").split
       assert_includes flags, "-llzma"
+      assert_includes flags, "-pthread"
+      assert_includes flags, "-lpthread"
       system kandelo_cc, source, *flags, "-o", wasm
+      system kandelo_cc, "-shared", "-fPIC", plugin_source, *flags, "-o", plugin
+      system kandelo_cc, loader_source, "-ldl", "-Wl,--export-all", "-o", loader
     end
     assert_equal "liblzma-mt-ok\n", kandelo_run_wasm(wasm, [])
+    assert_equal "liblzma-side-module #{version} ok\n",
+      kandelo_run_wasm(loader, [plugin])
 
     %w[lzcat lzma unlzma unxz xzcat].each do |name|
       assert_equal "xz", (bin/name).readlink.to_s
