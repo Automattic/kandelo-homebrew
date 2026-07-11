@@ -13,7 +13,7 @@ class KandeloFormulaSupportTest < Minitest::Test
   class Harness
     include KandeloFormulaSupport
 
-    attr_accessor :build_path, :nix_path, :root_path, :test_path
+    attr_accessor :build_path, :nix_path, :root_path, :shell_result, :test_path
     attr_reader :command, :expected_status, :recorded_launcher, :system_args
 
     def kandelo_require_root!
@@ -39,7 +39,7 @@ class KandeloFormulaSupportTest < Minitest::Test
     def shell_output(command, expected_status = 0)
       @command = command
       @expected_status = expected_status
-      "runtime-ok\n"
+      shell_result || "runtime-ok\n"
     end
 
     def odie(message)
@@ -368,6 +368,31 @@ class KandeloFormulaSupportTest < Minitest::Test
 
     assert_equal "runtime-ok\n", output
     assert_equal 2, harness.expected_status
+  end
+
+  def test_http_service_execution_uses_isolated_runner_and_serializes_mounts
+    harness = Harness.new
+    harness.shell_result = '[{"status":200,"text":"service-ok"}]'
+
+    responses = harness.kandelo_run_http_service(
+      "server.wasm",
+      ["-c", "/etc/server.conf"],
+      port:     8080,
+      requests: [{ path: "/health", headers: { "Host" => "localhost" } }],
+      mounts:   { "/opt/server" => "/tmp/server keg" },
+      env:      { "KERNEL_CWD" => "/opt/server" },
+      uid:      1000,
+      gid:      1000,
+    )
+
+    assert_equal [{ "status" => 200, "text" => "service-ok" }], responses
+    assert_includes harness.command, "run-http-service-wasm.ts"
+    assert_includes harness.command, "KANDELO_FORMULA_HTTP_SERVICE_JSON="
+    assert_includes harness.command, "KANDELO_FORMULA_GUEST_ENV_JSON="
+    assert_includes harness.command, "server.wasm -c /etc/server.conf"
+    assert_includes harness.command, "server\\ keg"
+    assert_includes harness.command, "1000"
+    assert_equal "kandelo_run_http_service", harness.recorded_launcher
   end
 
   def test_browser_execution_uses_focused_chromium_runner_and_removes_stale_host_dist

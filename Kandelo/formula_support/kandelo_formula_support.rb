@@ -301,6 +301,42 @@ module KandeloFormulaSupport
     output
   end
 
+  # Start a long-running Wasm service under NodeKernelHost, issue in-kernel
+  # HTTP requests, and return the decoded response records. This exercises the
+  # same forked server and kernel TCP path used by browser-hosted services while
+  # keeping Formula tests independent of host TCP ports.
+  def kandelo_run_http_service(
+    bin_path, argv, port:, requests:, mounts: {}, env: {}, uid: nil, gid: nil, timeout: 30
+  )
+    root = kandelo_require_root!
+    if (node = ENV.fetch("HOMEBREW_KANDELO_NODE", nil)).to_s != ""
+      ENV.prepend_path "PATH", File.dirname(node)
+    end
+
+    wasm_path = Pathname(bin_path)
+    if wasm_path.extname != ".wasm"
+      staged_wasm = testpath/"#{wasm_path.basename}.service.wasm"
+      File.binwrite(staged_wasm, File.binread(wasm_path))
+      wasm_path = staged_wasm
+    end
+
+    spec = JSON.generate({ port:, requests:, mounts:, uid:, gid:, timeout_ms: timeout * 1000 })
+    guest_env = JSON.generate(env.transform_values(&:to_s))
+    runner = Pathname(__dir__)/"run-http-service-wasm.ts"
+    command = "cd #{Shellwords.escape(root)} && "
+    command << "KANDELO_FORMULA_HTTP_SERVICE_JSON=#{Shellwords.escape(spec)} "
+    command << "KANDELO_FORMULA_GUEST_ENV_JSON=#{Shellwords.escape(guest_env)} "
+    command << "node --experimental-wasm-exnref --import tsx/esm "
+    command << "#{Shellwords.escape(runner.to_s)} #{Shellwords.escape(root)} "
+    command << Shellwords.escape(wasm_path.to_s)
+    argv.each { |arg| command << " #{Shellwords.escape(arg.to_s)}" }
+    command << " < /dev/null"
+
+    output = shell_output(command)
+    kandelo_record_node_execution!(wasm_path, argv, launcher: "kandelo_run_http_service")
+    JSON.parse(output)
+  end
+
   # Run an interactive Wasm program through Kandelo's real PTY path. Inputs
   # are written in order after the process starts, with short delays so curses
   # applications can render and transition between prompts. Writable guest
