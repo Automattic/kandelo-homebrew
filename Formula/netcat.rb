@@ -9,6 +9,9 @@ class Netcat < Formula
   sha256 "30719c9a4ffbcf15676b8f528233ccc54ee6cba96cb4590975f5fd60c68a066f"
   license "GPL-2.0-or-later"
 
+  depends_on "binaryen" => :build
+  depends_on "wabt" => :build
+
   skip_clean "bin/netcat"
 
   patch :DATA
