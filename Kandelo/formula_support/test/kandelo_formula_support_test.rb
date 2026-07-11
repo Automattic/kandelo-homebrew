@@ -14,7 +14,7 @@ class KandeloFormulaSupportTest < Minitest::Test
     include KandeloFormulaSupport
 
     attr_accessor :test_path
-    attr_reader :command, :expected_status
+    attr_reader :command, :expected_status, :system_args
 
     def kandelo_require_root!
       "/tmp/kandelo root"
@@ -30,6 +30,16 @@ class KandeloFormulaSupportTest < Minitest::Test
       "runtime-ok\n"
     end
 
+    # The Formula double must intercept Kernel#system under its real name.
+    # rubocop:disable Naming/PredicateMethod
+    def system(*args)
+      @system_args = args
+      output = args.fetch(args.index("-o") + 1)
+      File.binwrite(output, "instrumented")
+      true
+    end
+    # rubocop:enable Naming/PredicateMethod
+
     def kandelo_record_node_execution!(_wasm_path, _argv); end
   end
 
@@ -39,6 +49,20 @@ class KandeloFormulaSupportTest < Minitest::Test
     assert_nil Harness.new.kandelo_record_node_execution!("program.wasm", [])
   ensure
     ENV["HOMEBREW_KANDELO_NODE_RECEIPT_PATH"] = previous if previous
+  end
+
+  def test_fork_instrumentation_replaces_the_linked_program
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      harness = Harness.new
+      wasm = Pathname(dir)/"program.wasm"
+      wasm.binwrite("linked")
+
+      assert_equal wasm, harness.kandelo_fork_instrument(wasm)
+      assert_equal "instrumented", wasm.binread
+      assert_equal "/tmp/kandelo root/scripts/run-wasm-fork-instrument.sh", harness.system_args.first
+      assert_equal [wasm.to_s, "-o", "#{wasm}.fork-instrumented"], harness.system_args.drop(1)
+      refute File.exist?("#{wasm}.fork-instrumented")
+    end
   end
 
   def test_network_execution_uses_tap_owned_runner
@@ -66,6 +90,36 @@ class KandeloFormulaSupportTest < Minitest::Test
     assert_includes harness.command, "examples/run-example.ts"
     refute_includes harness.command, "run-network-wasm.ts"
     refute_includes harness.command, "KANDELO_FORMULA_ENABLE_NETWORK="
+  end
+
+  def test_execution_accepts_explicit_guest_exec_programs
+    harness = Harness.new
+
+    harness.kandelo_run_wasm(
+      "program.wasm",
+      [],
+      exec_programs: { "/bin/sh" => "/formula/dash" },
+    )
+
+    assert_includes harness.command, "run-network-wasm.ts"
+    assert_includes harness.command, "KANDELO_FORMULA_EXEC_PROGRAMS_JSON="
+    assert_includes harness.command, "/bin/sh"
+    assert_includes harness.command, "/formula/dash"
+  end
+
+  def test_execution_accepts_explicit_guest_files
+    harness = Harness.new
+
+    harness.kandelo_run_wasm(
+      "program.wasm",
+      [],
+      guest_files: { "/etc/service.conf" => "/formula/service.conf" },
+    )
+
+    assert_includes harness.command, "run-network-wasm.ts"
+    assert_includes harness.command, "KANDELO_FORMULA_GUEST_FILES_JSON="
+    assert_includes harness.command, "/etc/service.conf"
+    assert_includes harness.command, "/formula/service.conf"
   end
 
   def test_preserve_argv0_stages_the_original_command_name
