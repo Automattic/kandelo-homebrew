@@ -431,28 +431,37 @@ class KandeloFormulaSupportTest < Minitest::Test
     assert_equal "invalid browser guest command name: ..", error.message
   end
 
-  def test_pty_execution_uses_tap_owned_runner
-    harness = Harness.new
-    output = harness.kandelo_run_pty_wasm(
-      "program.wasm", ["note.txt"],
-      env:               { "KERNEL_CWD" => "/tmp/formula test" },
-      inputs:            ["\u001c", "beta", "\r"],
-      rerun_inputs:      ["\u0018"],
-      guest_files:       { "/etc/program.conf" => "/formula/program.conf" },
-      guest_directories: ["/home/linuxbrew/.linuxbrew/var/program/save"],
-      writable_guest_directories: ["/home/linuxbrew/.linuxbrew/var/program"]
-    )
+  def test_pty_execution_uses_tap_owned_runner_and_removes_stale_host_dist
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      root = Pathname(dir)/"kandelo root"
+      host_dist = root/"host/dist"
+      host_dist.mkpath
+      (host_dist/"stale.js").binwrite("stale")
 
-    assert_equal "runtime-ok\n", output
-    assert_includes harness.command, "run-pty-wasm.ts"
-    assert_includes harness.command, "KANDELO_FORMULA_PTY_CONFIG_JSON="
-    assert_includes harness.command, "note.txt"
-    assert_includes harness.command, "beta"
-    assert_includes harness.command, "rerunInputs"
-    assert_includes harness.command, "/etc/program.conf"
-    assert_includes harness.command, "/home/linuxbrew/.linuxbrew/var/program"
-    assert_includes harness.command, "writableGuestDirectories"
-    assert_includes harness.command, "program.wasm"
-    assert_equal "kandelo_run_pty_wasm", harness.recorded_launcher
+      harness = Harness.new
+      harness.root_path = root.to_s
+      output = harness.kandelo_run_pty_wasm(
+        "program.wasm", ["note.txt"],
+        env:               { "KERNEL_CWD" => "/tmp/formula test" },
+        inputs:            ["\u001c", "beta", "\r"],
+        rerun_inputs:      ["\u0018"],
+        guest_files:       { "/etc/program.conf" => "/formula/program.conf" },
+        guest_directories: ["/home/linuxbrew/.linuxbrew/var/program/save"],
+        writable_guest_directories: ["/home/linuxbrew/.linuxbrew/var/program"]
+      )
+
+      assert_equal "runtime-ok\n", output
+      assert_includes harness.command, "run-pty-wasm.ts"
+      assert_includes harness.command, "KANDELO_FORMULA_PTY_CONFIG_JSON="
+      assert_includes harness.command, "note.txt"
+      assert_includes harness.command, "beta"
+      assert_includes harness.command, "rerunInputs"
+      assert_includes harness.command, "/etc/program.conf"
+      assert_includes harness.command, "/home/linuxbrew/.linuxbrew/var/program"
+      assert_includes harness.command, "writableGuestDirectories"
+      assert_includes harness.command, "program.wasm"
+      assert_equal "kandelo_run_pty_wasm", harness.recorded_launcher
+      refute_path_exists host_dist
+    end
   end
 end

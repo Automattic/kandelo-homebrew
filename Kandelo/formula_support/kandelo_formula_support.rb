@@ -330,6 +330,11 @@ module KandeloFormulaSupport
       cols:             cols,
       rows:             rows,
     })
+
+    # Compiled host output shadows TypeScript source under tsx. PTY formula
+    # tests must exercise the checkout supplied by HOMEBREW_KANDELO_ROOT.
+    FileUtils.rm_rf(Pathname(root)/"host/dist")
+
     runner = Pathname(__dir__)/"run-pty-wasm.ts"
     command = "cd #{Shellwords.escape(root)} && "
     command << "KANDELO_FORMULA_PTY_CONFIG_JSON=#{Shellwords.escape(config)} "
