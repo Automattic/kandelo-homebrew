@@ -10,7 +10,7 @@ class Unzip < Formula
   sha256 "036d96991646d0449ed0aa952e4fbe21b476ce994abc276e49d30e686708bd37"
   license "Info-ZIP"
 
-  skip_clean "bin/unzip"
+  skip_clean "bin/unzip", "bin/funzip"
 
   # Upstream is unmaintained. Follow Homebrew's maintained formula and apply
   # Ubuntu's security, correctness, and reproducibility fixes.
@@ -85,8 +85,8 @@ class Unzip < Formula
     end
 
     kandelo_install_bin(buildpath, "unzip", "unzip")
+    kandelo_install_bin(buildpath, "funzip", "funzip")
     bin.install_symlink "unzip" => "zipinfo"
-    bin.install_symlink "unzip" => "funzip"
   end
 
   test do
@@ -113,11 +113,16 @@ class Unzip < Formula
     assert_equal "alpha from Kandelo\n" * 64, (extracted/"alpha.txt").read
     assert_equal "beta from Kandelo\n" * 48, (extracted/"nested/beta.txt").read
 
-    assert_equal "alpha.txt\nnested/beta.txt\n", kandelo_run_wasm(
-      bin/"zipinfo", ["-1", "fixture.zip"], env: cwd_env, preserve_argv0: true
-    )
+    assert_equal "alpha.txt\nnested/beta.txt\n",
+      kandelo_run_wasm(bin/"unzip", ["-Z", "-1", "fixture.zip"], env: cwd_env)
+    assert_match(/^ZipInfo 3\.00/, kandelo_run_wasm(bin/"zipinfo", ["-h"], preserve_argv0: true))
+
+    funzip_archive =
+      "UEsDBBQAAAAIAAAAIVxY+qxoIAAAAMAEAAAJAAAAYWxwaGEudHh0S8wpyEhUSCvKz1XwTsxLSc3J50ocFRoV" \
+      "GhUaFRoKQgBQSwECHgMUAAAACAAAACFcWPqsaCAAAADABAAACQAAAAAAAAABAAAApIEAAAAAYWxwaGEudHh0" \
+      "UEsFBgAAAAABAAEANwAAAEcAAAAAAA==".unpack1("m0")
     assert_equal "alpha from Kandelo\n" * 64,
-      kandelo_run_wasm(bin/"funzip", [], stdin: archive.binread, preserve_argv0: true)
+      kandelo_run_wasm(bin/"funzip", [], stdin: funzip_archive, preserve_argv0: true)
 
     missing = kandelo_run_wasm(
       bin/"unzip", ["missing.zip"], env: cwd_env, merge_stderr: true, expected_status: 9
