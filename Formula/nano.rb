@@ -57,6 +57,25 @@ class Nano < Formula
     assert_includes help_output, "--ignorercfiles"
     assert_includes help_output, "--modernbindings"
 
+    note = testpath/"note.txt"
+    empty_terminfo = testpath/"empty-terminfo"
+    note.write "alpha\nbeta\n"
+    empty_terminfo.mkpath
+    transcript = kandelo_run_pty_wasm(
+      bin/"nano", [note.basename],
+      env:    {
+        "HOME"       => testpath,
+        "KERNEL_CWD" => testpath,
+        "LANG"       => "C.UTF-8",
+        "TERM"       => "xterm-256color",
+        "TERMINFO"   => empty_terminfo,
+      },
+      inputs: ["\u001c", "beta", "\r", "BETA", "\r", "a", "\u000f", "\r", "\u0018"]
+    )
+    assert_includes transcript, "Search"
+    assert_includes transcript, "Wrote 2 lines"
+    assert_equal "alpha\nBETA\n", note.read
+
     binary = File.binread(bin/"nano")
     assert_includes binary, "/home/linuxbrew/.linuxbrew/etc/nanorc"
     refute_includes binary, prefix.to_s
