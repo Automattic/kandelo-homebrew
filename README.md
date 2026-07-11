@@ -35,7 +35,7 @@ Current migration controls and pilots include:
 - `dash`, the dependency-free POSIX shell with instrumented subprocess support;
 - `make`, GNU dependency-driven build automation using the tap's POSIX shell;
 - `ed`, the conforming line editor and restricted editor required by patch workflows;
-- `m4`, the GNU macro processor with process-executing builtins.
+- `m4`, the GNU macro processor with process-executing builtins backed by the tap's Dash shell.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node

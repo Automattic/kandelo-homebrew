@@ -10,6 +10,8 @@ class M4 < Formula
   sha256 "f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66"
   license "GPL-3.0-or-later"
 
+  depends_on "automattic/kandelo-homebrew/dash"
+
   skip_clean "bin/m4"
 
   # Gnulib identifies musl from the GNU host tuple but assumes that every
@@ -19,19 +21,15 @@ class M4 < Formula
   def install
     kandelo_require_arch!("wasm32")
 
-    kandelo_wasm_build do |root|
+    kandelo_wasm_build do
       # The SDK site owns target facts; this gnulib runtime probe is package-specific.
       ENV["gl_cv_func_strerror_0_works"] = "yes"
 
       system kandelo_configure, *kandelo_std_configure_args,
         "--disable-nls",
-        "--disable-dependency-tracking"
+        "--disable-dependency-tracking",
+        "--with-syscmd-shell=dash"
       system "make", "-j#{ENV.make_jobs}"
-
-      instrumented = buildpath/"src/m4.instrumented"
-      system "#{root}/scripts/run-wasm-fork-instrument.sh",
-        buildpath/"src/m4", "-o", instrumented
-      mv instrumented, buildpath/"src/m4"
 
       system "make", "install"
     end
@@ -40,6 +38,10 @@ class M4 < Formula
   test do
     assert_match(/m4(?:\.wasm)? \(GNU M4\) 1\.4\.21$/,
       kandelo_run_wasm(bin/"m4", ["--version"]))
+
+    dash = testpath/"dash"
+    dash.binwrite((formula_opt_bin("automattic/kandelo-homebrew/dash")/"dash").binread)
+    dash.chmod 0755
 
     definitions = testpath/"definitions.m4"
     definitions.write("define(`VALUE', `42')dnl\n")
@@ -52,7 +54,9 @@ class M4 < Formula
     M4
 
     assert_equal "Kandelo-Kandelo-Kandelo:42\nchild-process\nchild-ok\n",
-      kandelo_run_wasm(bin/"m4", [], env: { "KERNEL_CWD" => testpath }, stdin: source)
+      kandelo_run_wasm(
+        bin/"m4", [], env: { "KERNEL_CWD" => testpath, "KERNEL_PATH" => testpath }, stdin: source
+      )
   end
 end
 
