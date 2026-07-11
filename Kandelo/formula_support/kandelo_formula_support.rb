@@ -382,12 +382,14 @@ module KandeloFormulaSupport
   # ordinary files in the guest VFS, `writable_host_directories:` exposes
   # explicit host directories as writable guest mounts for output validation,
   # `expected_fork_descendants:` keeps the host alive until at least that many
-  # fork descendants have exited successfully, and `expected_status:`
-  # permits tests for specified nonzero results such as a grep no-match status.
+  # fork descendants have exited successfully, `max_workers:` raises the
+  # isolated host's total worker budget for runtimes that declare more than the
+  # default seven auxiliary pthread slots, and `expected_status:` permits tests
+  # for specified nonzero results such as a grep no-match status.
   def kandelo_run_wasm(
     bin_path, argv, env: {}, stdin: nil, merge_stderr: false, network: false,
     preserve_argv0: false, argv0: nil, exec_programs: {}, guest_files: {},
-    writable_host_directories: {}, expected_fork_descendants: 0, expected_status: 0
+    writable_host_directories: {}, expected_fork_descendants: 0, max_workers: 8, expected_status: 0
   )
     root = kandelo_require_root!
     kandelo_validate_guest_argv0!(argv0)
@@ -413,7 +415,7 @@ module KandeloFormulaSupport
     command << Shellwords.escape(root) << " && "
     isolated_runner = network || preserve_argv0 || !argv0.nil? || exec_programs.any? ||
                       guest_files.any? || writable_host_directories.any? ||
-                      expected_fork_descendants.positive?
+                      expected_fork_descendants.positive? || max_workers != 8
     if isolated_runner
       guest_env = JSON.generate(env.transform_values(&:to_s))
       guest_exec_programs = JSON.generate(exec_programs.transform_values(&:to_s))
@@ -428,6 +430,7 @@ module KandeloFormulaSupport
       if expected_fork_descendants.positive?
         command << "KANDELO_FORMULA_EXPECTED_FORK_DESCENDANTS=#{expected_fork_descendants} "
       end
+      command << "KANDELO_FORMULA_MAX_WORKERS=#{Integer(max_workers)} "
     else
       env.each { |key, value| command << "#{key}=#{Shellwords.escape(value.to_s)} " }
     end

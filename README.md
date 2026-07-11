@@ -59,6 +59,7 @@ Current migration controls and pilots include:
   Kandelo's musl `catopen` and `catgets` implementation.
 - `ctags`, Universal Ctags' maintained tag generator, `readtags` query client,
   and optscript interpreter with complete C and C++ workflows.
+- `erlang`, the Erlang/OTP runtime, libraries, compiler, and process-spawning toolchain.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node

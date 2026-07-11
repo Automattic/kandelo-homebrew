@@ -219,11 +219,21 @@ async function main(): Promise<void> {
     writeGuestFile(rootfs, entry.guestPath, entry.bytes, entry.mode);
   }
   const rootfsImage = await rootfs.saveImage();
+  const maxWorkersText = process.env.KANDELO_FORMULA_MAX_WORKERS ?? "8";
+  if (!/^[1-9][0-9]*$/.test(maxWorkersText)) {
+    throw new Error(`invalid formula max worker count: ${maxWorkersText}`);
+  }
+  const maxWorkers = Number.parseInt(maxWorkersText, 10);
+  if (!Number.isSafeInteger(maxWorkers) || maxWorkers > 256) {
+    throw new Error(
+      `formula max worker count is out of range: ${maxWorkersText}`,
+    );
+  }
   const activePids = new Set<number>();
   const descendantPids = new Set<number>();
   const descendantExitStatuses = new Map<number, number>();
   const host = new NodeKernelHost({
-    maxWorkers: 8,
+    maxWorkers,
     execPrograms,
     extraMounts: Object.entries(writableHostDirectories).map(
       ([mountPoint, hostPath]) => ({ mountPoint, hostPath, readonly: false }),
