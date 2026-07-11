@@ -79,7 +79,7 @@ class Gawk < Formula
       bin/"gawk", ["{ print }", "missing.txt"],
       env:             { "KERNEL_CWD" => testpath },
       merge_stderr:    true,
-      expected_status: 2,
+      expected_status: 2
     )
     assert_match(/missing\.txt.*No such file or directory/, missing)
   end
