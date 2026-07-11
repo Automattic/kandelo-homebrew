@@ -29,7 +29,7 @@ class Pcre2 < Formula
         "--enable-pcre2-32",
         "--enable-unicode",
         "--disable-jit",
-        # The authoritative source-kind registry contract has no dependencies.
+        # The authoritative source-kind registry contract has no target dependencies.
         # Keep compressed-input support out of this first formula contract;
         # tap main does not yet publish libbz2's headers/static library.
         "--disable-pcre2grep-libz",
@@ -95,6 +95,7 @@ class Pcre2 < Formula
       assert_includes contents, opt_prefix.to_s
       refute_includes contents, prefix.to_s
     end
+    assert_equal opt_prefix.to_s, Utils.safe_popen_read(bin/"pcre2-config", "--prefix").strip
     runtime_artifacts = [bin/"pcre2grep", bin/"pcre2test", *lib.glob("libpcre2*.a")]
     runtime_artifacts.each do |path|
       contents = File.binread(path)
@@ -118,6 +119,7 @@ class Pcre2 < Formula
       bin/"pcre2grep", ["-u", "-o1", "^(\\p{L}+)\\x{1F680}$"], stdin: unicode_input
     )
 
+    # /bin/sh is Kandelo base-system state supplied by dash, not a formula edge.
     callout_pattern = 'abc(?C"/bin/sh|-c|printf callout-ok")'
     assert_equal "callout-okabc\n", kandelo_run_wasm(
       bin/"pcre2grep", [callout_pattern], stdin: "abc\n"
