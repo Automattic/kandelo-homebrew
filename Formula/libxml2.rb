@@ -160,7 +160,7 @@ class Libxml2 < Formula
       %w[-lxml2 -lz -lm -ldl].each do |flag|
         assert_includes flags, flag
       end
-      system kandelo_cc, source, *flags, "-o", wasm
+      system kandelo_cc, source, "-I#{zlib}/include", *flags, "-o", wasm
     end
     assert_equal "libxml2-ok\n", kandelo_run_wasm(wasm, [])
 
