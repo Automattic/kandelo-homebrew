@@ -16,6 +16,8 @@ class Wget < Formula
   sha256 "766e48423e79359ea31e41db9e5c289675947a7fcf2efdcedb726ac9d0da3784"
   license "GPL-3.0-or-later"
 
+  depends_on "binaryen" => :build
+  depends_on "wabt" => :build
   depends_on "automattic/kandelo-homebrew/openssl"
   depends_on "automattic/kandelo-homebrew/zlib"
 
@@ -81,62 +83,11 @@ class Wget < Formula
       system "make", "-C", "src", "wget"
 
       artifact = kandelo_fork_instrument(buildpath/"src/wget")
-      artifact_guards = "#{root}/scripts/wasm-artifact-guards.sh"
-      system "bash", "-c", <<~SH
-        set -euo pipefail
-        . #{artifact_guards.shellescape}
-        wasm_require_no_legacy_asyncify #{artifact.to_s.shellescape}
-        if ! wasm_imports_kernel_fork #{artifact.to_s.shellescape}; then
-          echo "ERROR: Wget no longer imports kernel_fork" >&2
-          exit 1
-        fi
-        wasm_require_fork_instrumentation_if_needed #{artifact.to_s.shellescape}
-        if ! wasm_has_complete_fork_instrumentation #{artifact.to_s.shellescape}; then
-          echo "ERROR: Wget has incomplete fork instrumentation" >&2
-          exit 1
-        fi
-      SH
-
-      expected_abi = (Pathname(root)/"crates/shared/src/lib.rs").read[
-        /^pub const ABI_VERSION: u32 = ([0-9]+);$/,
-        1,
-      ]
-      odie "could not read Kandelo ABI version" if expected_abi.nil?
-
-      abi_probe = <<~JS
-        import { readFileSync } from "node:fs";
-        import { pathToFileURL } from "node:url";
-        const { extractAbiVersion } = await import(pathToFileURL(process.argv[1]).href);
-        const bytes = readFileSync(process.argv[2]);
-        const program = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-        const abi = extractAbiVersion(program);
-        if (abi === null) process.exit(2);
-        process.stdout.write(String(abi));
-      JS
-      artifact_abi = cd(root) do
-        Utils.safe_popen_read(
-          "node", "--import", "tsx/esm", "--input-type=module", "--eval", abi_probe,
-          Pathname(root)/"host/src/constants.ts", artifact
-        ).strip
-      end
-      odie "Wget ABI #{artifact_abi} does not match Kandelo ABI #{expected_abi}" if artifact_abi != expected_abi
-
-      binary = artifact.binread
-      {
-        "Wget build path"       => buildpath.to_s,
-        "Wget Cellar path"      => prefix.to_s,
-        "Wget host etc path"    => etc.to_s,
-        "Kandelo checkout path" => root.to_s,
-        "OpenSSL build prefix"  => openssl.to_s,
-        "zlib build prefix"     => zlib.to_s,
-        "Nix store path"        => "/nix/store/",
-        "temporary build path"  => "/private/tmp/",
-        "CI workspace path"     => "/home/runner/work/",
-        "OpenSSL Cellar path"   => "/Cellar/openssl/",
-      }.each do |description, marker|
-        odie "Wget embeds #{description}: #{marker}" if binary.include?(marker)
-      end
-      odie "Wget embeds a builder home path" if binary.match?(%r{/Users/[^/]+/})
+      kandelo_validate_wasm_artifact(
+        artifact,
+        fork:            :required,
+        forbidden_paths: [etc, openssl, zlib],
+      )
     end
 
     kandelo_install_bin(buildpath/"src", "wget", "wget")
