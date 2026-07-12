@@ -10,6 +10,8 @@ class Zip < Formula
   sha256 "f0e8bb1f9b7eb0b01285495a2699df3a4b766784c1765a8f1aeedf63c0806369"
   license "Info-ZIP"
 
+  depends_on "binaryen" => :build
+  depends_on "wabt" => :build
   depends_on "automattic/kandelo-homebrew/unzip"
 
   skip_clean "bin/zip"
@@ -57,6 +59,7 @@ class Zip < Formula
         "IZ_BZIP2=",
         "LIB_BZ=",
         "zips"
+      kandelo_validate_wasm_artifact(buildpath/"zip", fork: :forbidden)
     end
 
     kandelo_install_bin(buildpath, "zip", "zip")
