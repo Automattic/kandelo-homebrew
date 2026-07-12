@@ -10,7 +10,9 @@ class Bc < Formula
   sha256 "ae470fec429775653e042015edc928d07c8c3b2fc59765172a330d3d87785f86"
   license "GPL-3.0-or-later"
 
+  depends_on "binaryen" => :build
   depends_on "texinfo" => :build
+  depends_on "wabt" => :build
 
   skip_clean "bin/bc", "bin/dc"
 
@@ -25,6 +27,8 @@ class Bc < Formula
         "--without-libedit",
         "--without-readline"
       system "make", "-j#{ENV.make_jobs}"
+      kandelo_validate_wasm_artifact(buildpath/"bc/bc", fork: :forbidden)
+      kandelo_validate_wasm_artifact(buildpath/"dc/dc", fork: :forbidden)
       system "make", "install"
     end
   end
