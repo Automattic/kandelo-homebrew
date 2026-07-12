@@ -9,11 +9,13 @@ require_relative "../kandelo_formula_support"
 
 # Regression coverage for Formula runtime execution evidence.
 class KandeloFormulaSupportTest < Minitest::Test
+  DependencyFormula = Struct.new(:full_name, :opt_bin, :opt_sbin, :opt_libexec, keyword_init: true)
+
   # Minimal Formula double for command-construction tests.
   class Harness
     include KandeloFormulaSupport
 
-    attr_accessor :build_path, :nix_path, :prefix_path, :root_path, :shell_result, :test_path
+    attr_accessor :build_path, :nix_path, :prefix_path, :root_path, :runtime_formulae, :shell_result, :test_path
     attr_reader :command, :expected_status, :recorded_launcher, :system_args, :system_calls
 
     def kandelo_require_root!
@@ -34,6 +36,12 @@ class KandeloFormulaSupportTest < Minitest::Test
 
     def kandelo_nix_executable
       nix_path || super
+    end
+
+    def runtime_formula_dependencies(read_from_tab:, undeclared:)
+      raise "runtime dependency lookup must use declarations" if read_from_tab || undeclared
+
+      runtime_formulae || []
     end
 
     def odie(message)
@@ -264,6 +272,43 @@ class KandeloFormulaSupportTest < Minitest::Test
 
       assert_equal "#{caller.realpath}\n", output
     end
+  end
+
+  def test_host_build_path_keeps_native_tools_and_removes_target_runtime_bins
+    harness = Harness.new
+    harness.runtime_formulae = [
+      DependencyFormula.new(
+        full_name:   "automattic/kandelo-homebrew/coreutils",
+        opt_bin:     Pathname("/prefix/opt/coreutils/bin"),
+        opt_sbin:    Pathname("/prefix/opt/coreutils/sbin"),
+        opt_libexec: Pathname("/prefix/opt/coreutils/libexec"),
+      ),
+      DependencyFormula.new(
+        full_name:   "wabt",
+        opt_bin:     Pathname("/prefix/opt/wabt/bin"),
+        opt_sbin:    Pathname("/prefix/opt/wabt/sbin"),
+        opt_libexec: Pathname("/prefix/opt/wabt/libexec"),
+      ),
+    ]
+    original = ENV.to_hash
+    ENV["PATH"] = [
+      "/prefix/opt/coreutils/bin",
+      "/prefix/opt/coreutils/sbin",
+      "/prefix/opt/coreutils/libexec/bin",
+      "/prefix/opt/wabt/bin",
+      "/usr/bin",
+    ].join(File::PATH_SEPARATOR)
+
+    harness.kandelo_isolate_host_build_path!
+    build_path = ENV.fetch("PATH")
+
+    refute_includes build_path, "/prefix/opt/coreutils/bin"
+    refute_includes build_path, "/prefix/opt/coreutils/sbin"
+    refute_includes build_path, "/prefix/opt/coreutils/libexec/bin"
+    assert_includes build_path, "/prefix/opt/wabt/bin"
+    assert_includes build_path, "/usr/bin"
+  ensure
+    ENV.replace(original) if original
   end
 
   def test_network_execution_uses_tap_owned_runner

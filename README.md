@@ -60,6 +60,12 @@ host used by Formula `test do` blocks. Guest installation therefore requires a
 published Kandelo bottle; building from source is currently a maintainer and CI
 workflow.
 
+During a source build, the shared Formula support removes Kandelo runtime
+dependency executable directories from the host `PATH`. Those dependencies are
+target Wasm and remain available through `formula_opt_prefix` for headers,
+libraries, and explicit runtime staging; native Homebrew build dependencies
+remain on the host `PATH`.
+
 ## Publication State
 
 Bottle metadata must be generated from the same trusted build that produces
