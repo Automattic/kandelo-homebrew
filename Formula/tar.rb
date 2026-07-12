@@ -12,6 +12,8 @@ class Tar < Formula
   sha256 "4d62ff37342ec7aed748535323930c7cf94acf71c3591882b26a7ea50f3edc16"
   license "GPL-3.0-or-later"
 
+  depends_on "binaryen" => :build
+  depends_on "wabt" => :build
   depends_on "automattic/kandelo-homebrew/gzip"
 
   skip_clean "bin/tar", "libexec/rmt"
@@ -29,7 +31,9 @@ class Tar < Formula
         "--without-posix-acls",
         "--with-xattrs=no"
       system "make"
-      kandelo_fork_instrument(buildpath/"src/tar")
+      tar = kandelo_fork_instrument(buildpath/"src/tar")
+      kandelo_validate_wasm_artifact(tar, fork: :required)
+      kandelo_validate_wasm_artifact(buildpath/"rmt/rmt", fork: :forbidden)
     end
 
     kandelo_install_bin(buildpath/"src", "tar", "tar")
