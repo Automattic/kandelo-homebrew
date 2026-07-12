@@ -251,7 +251,7 @@ def check_contract_workflow(workflow)
     "Kandelo/test-workflow-trust.rb",
   ]
   expected_events = {
-    "pull_request" => { "paths" => watched_paths },
+    "pull_request" => {},
     "push" => { "branches" => ["main"], "paths" => watched_paths },
   }
   check(events == expected_events, "contract-check workflow triggers changed")
@@ -406,9 +406,15 @@ def self_test(dry_run, publish, contract)
     mutated.dig("jobs", "publisher-trust")["runs-on"] = "self-hosted"
     check_contract_workflow(mutated)
   end
-  expect_rejection("contract checks that ignore workflow changes") do
+  expect_rejection("contract checks filtered out of formula pull requests") do
     mutated = deep_copy(contract)
-    workflow_events(mutated).fetch("pull_request")["paths"] = ["README.md"]
+    workflow_events(mutated)["pull_request"] = {
+      "paths" => [
+        ".github/workflows/**",
+        "Kandelo/test-workflow-trust.sh",
+        "Kandelo/test-workflow-trust.rb",
+      ],
+    }
     check_contract_workflow(mutated)
   end
 end

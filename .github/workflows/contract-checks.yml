@@ -1,11 +1,7 @@
 name: Tap contract checks
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/**"
-      - "Kandelo/test-workflow-trust.sh"
-      - "Kandelo/test-workflow-trust.rb"
+  pull_request: {}
   push:
     branches: [main]
     paths:

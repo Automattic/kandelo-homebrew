@@ -127,9 +127,13 @@ gh api --method POST repos/Automattic/kandelo-homebrew/dispatches \
   -f event_type=dry-run-kandelo-bottles \
   -f 'client_payload[formulae]=bzip2,xz' \
   -f 'client_payload[arches]=wasm32' \
-  -f 'client_payload[tap_ref]=migrate/compression-library-surfaces' \
+  -f 'client_payload[tap_ref]=main' \
   -f 'client_payload[kandelo_ref]=main'
 ```
+
+Replace `main` with a reviewed branch name or exact commit SHA when the dry run
+needs to execute unmerged tap or Kandelo code. Both refs are data passed to the
+read-only publisher; they never select the dispatch workflow definition.
 
 Write publication accepts formulae, arches, and an optional release tag, but
 hardcodes both executable repositories to reviewed `main`:
