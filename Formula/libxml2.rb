@@ -3,11 +3,15 @@ require (Tap.fetch("automattic", "kandelo-homebrew").path/"Kandelo/formula_suppo
 class Libxml2 < Formula
   include KandeloFormulaSupport
 
+  GUEST_SYSCONFDIR = "/home/linuxbrew/.linuxbrew/etc".freeze
+  GUEST_CATALOG_URI = "file://#{GUEST_SYSCONFDIR}/xml/catalog".freeze
+
   desc "GNOME XML parsing library for Kandelo"
   homepage "https://gitlab.gnome.org/GNOME/libxml2/-/wikis/home"
   url "https://download.gnome.org/sources/libxml2/2.13/libxml2-2.13.8.tar.xz"
   sha256 "277294cb33119ab71b2bc81f2f445e9bc9435b893ad15bb2cd2b0e859a0ee84a"
   license "MIT"
+  revision 1
 
   depends_on "cmake" => :build
   depends_on "pkgconf" => :build
@@ -36,6 +40,9 @@ class Libxml2 < Formula
       system "cmake", "-S", ".", "-B", "build",
         "-DCMAKE_INSTALL_PREFIX=#{prefix}",
         "-DCMAKE_INSTALL_LIBDIR=lib",
+        # Keep install metadata relocatable through the host keg while the
+        # target library resolves its global catalog from the guest prefix.
+        "-DCMAKE_INSTALL_SYSCONFDIR=#{GUEST_SYSCONFDIR}",
         "-DCMAKE_BUILD_TYPE=Release",
         "-DCMAKE_SYSTEM_NAME=Generic",
         "-DCMAKE_SYSTEM_PROCESSOR=#{kandelo_arch}",
@@ -63,6 +70,9 @@ class Libxml2 < Formula
     assert_path_exists lib/"libxml2.a"
     assert_path_exists include/"libxml2/libxml/parser.h"
     assert_path_exists lib/"pkgconfig/libxml-2.0.pc"
+    archive = (lib/"libxml2.a").binread
+    assert_includes archive, GUEST_CATALOG_URI
+    refute_includes archive, prefix.to_s
 
     zlib = formula_opt_prefix("automattic/kandelo-homebrew/zlib")
     source = testpath/"libxml2-smoke.c"
@@ -150,7 +160,7 @@ class Libxml2 < Formula
       %w[-lxml2 -lz -lm -ldl].each do |flag|
         assert_includes flags, flag
       end
-      system kandelo_cc, source, *flags, "-o", wasm
+      system kandelo_cc, source, "-I#{zlib}/include", "-L#{zlib}/lib", *flags, "-o", wasm
     end
     assert_equal "libxml2-ok\n", kandelo_run_wasm(wasm, [])
 
