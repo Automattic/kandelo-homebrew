@@ -708,9 +708,11 @@ class KandeloFormulaSupportTest < Minitest::Test
         env:                        { "KERNEL_CWD" => "/tmp/formula test" },
         inputs:                     ["\u001c", "beta", "\r"],
         rerun_inputs:               ["\u0018"],
+        exec_programs:              { "/opt/program/bin/helper" => "/formula/helper" },
         guest_files:                { "/etc/program.conf" => "/formula/program.conf" },
         guest_directories:          ["/home/linuxbrew/.linuxbrew/var/program/save"],
-        writable_guest_directories: ["/home/linuxbrew/.linuxbrew/var/program"]
+        writable_guest_directories: ["/home/linuxbrew/.linuxbrew/var/program"],
+        writable_host_directories:  { "/work" => "/formula/test output" }
       )
 
       assert_equal "runtime-ok\n", output
@@ -720,9 +722,14 @@ class KandeloFormulaSupportTest < Minitest::Test
       assert_includes harness.command, "note.txt"
       assert_includes harness.command, "beta"
       assert_includes harness.command, "rerunInputs"
+      assert_includes harness.command, "/opt/program/bin/helper"
+      assert_includes harness.command, "/formula/helper"
       assert_includes harness.command, "/etc/program.conf"
       assert_includes harness.command, "/home/linuxbrew/.linuxbrew/var/program"
       assert_includes harness.command, "writableGuestDirectories"
+      assert_includes harness.command, "writableHostDirectories"
+      assert_includes harness.command, "/work"
+      assert_includes harness.command, "/formula/test\\ output"
       assert_includes harness.command, "program.wasm"
       assert_equal "kandelo_run_pty_wasm", harness.recorded_launcher
       refute_path_exists host_dist

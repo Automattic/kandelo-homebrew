@@ -3,10 +3,11 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { rootfsSizeForStagedBytes, validateGuestPath } from "./rootfs-size.ts";
@@ -22,9 +23,11 @@ interface PtyConfig {
   env: Record<string, string>;
   inputs: string[];
   rerunInputs?: string[] | null;
+  execPrograms?: Record<string, string>;
   guestFiles?: Record<string, string>;
   guestDirectories?: string[];
   writableGuestDirectories?: string[];
+  writableHostDirectories?: Record<string, string>;
   initialDelayMs: number;
   inputDelayMs: number;
   cols: number;
@@ -64,11 +67,12 @@ function writeGuestFile(
   rootfs: WritableRootfs,
   guestPath: string,
   bytes: Uint8Array,
+  mode: number,
 ): void {
   const parts = guestPath.split("/").filter(Boolean);
   createGuestDirectory(rootfs, `/${parts.slice(0, -1).join("/")}`);
 
-  const fd = rootfs.open(guestPath, O_WRONLY | O_CREAT | O_TRUNC, 0o644);
+  const fd = rootfs.open(guestPath, O_WRONLY | O_CREAT | O_TRUNC, mode);
   try {
     let offset = 0;
     while (offset < bytes.byteLength) {
@@ -121,14 +125,23 @@ async function main(): Promise<void> {
   if (configuredArgv0 !== undefined) validateGuestPath(configuredArgv0, []);
   const argv0 = configuredArgv0 ?? programPath;
 
+  const execPrograms = config.execPrograms ?? {};
   const guestFiles = config.guestFiles ?? {};
   const guestDirectories = config.guestDirectories ?? [];
   const writableGuestDirectories = config.writableGuestDirectories ?? [];
+  const writableHostDirectories = config.writableHostDirectories ?? {};
   if (!Array.isArray(guestDirectories)) {
     throw new Error("guestDirectories must be an array");
   }
   if (!Array.isArray(writableGuestDirectories)) {
     throw new Error("writableGuestDirectories must be an array");
+  }
+  if (
+    writableHostDirectories === null ||
+    typeof writableHostDirectories !== "object" ||
+    Array.isArray(writableHostDirectories)
+  ) {
+    throw new Error("writableHostDirectories must be an object");
   }
 
   const moduleUrl = pathToFileURL(
@@ -148,26 +161,30 @@ async function main(): Promise<void> {
     ]);
 
   const guestPaths = [
+    ...Object.keys(execPrograms),
     ...Object.keys(guestFiles),
     ...guestDirectories,
     ...writableGuestDirectories,
+    ...Object.keys(writableHostDirectories),
   ];
   for (const guestPath of guestPaths) validateGuestPath(guestPath, []);
-  for (let i = 0; i < writableGuestDirectories.length; i++) {
-    const guestRoot = writableGuestDirectories[i];
+  const writableHostRoots = Object.keys(writableHostDirectories);
+  const writableRoots = [...writableGuestDirectories, ...writableHostRoots];
+  for (let i = 0; i < writableRoots.length; i++) {
+    const guestRoot = writableRoots[i];
     if (guestRoot === "/dev" || guestRoot.startsWith("/dev/")) {
-      throw new Error(`writable guest directory overlaps /dev: ${guestRoot}`);
+      throw new Error(`writable guest mount overlaps /dev: ${guestRoot}`);
     }
     if (guestRoot === "/proc" || guestRoot.startsWith("/proc/")) {
-      throw new Error(`writable guest directory overlaps /proc: ${guestRoot}`);
+      throw new Error(`writable guest mount overlaps /proc: ${guestRoot}`);
     }
-    for (const otherRoot of writableGuestDirectories.slice(i + 1)) {
+    for (const otherRoot of writableRoots.slice(i + 1)) {
       if (
         pathWithin(guestRoot, otherRoot) ||
         pathWithin(otherRoot, guestRoot)
       ) {
         throw new Error(
-          `writable guest directories must not overlap: ${guestRoot}, ${otherRoot}`,
+          `writable guest mounts must not overlap: ${guestRoot}, ${otherRoot}`,
         );
       }
     }
@@ -179,25 +196,64 @@ async function main(): Promise<void> {
     "/dev",
     "/proc",
   ];
-  for (const guestPath of [...Object.keys(guestFiles), ...guestDirectories]) {
+  for (const guestRoot of writableHostRoots) {
+    validateGuestPath(guestRoot, overlaidRoots);
+    const hostPath = writableHostDirectories[guestRoot];
+    if (!isAbsolute(hostPath) || resolve(hostPath) !== hostPath) {
+      throw new Error(
+        `writable host directory must be absolute and normalized: ${hostPath}`,
+      );
+    }
+    if (!statSync(hostPath).isDirectory()) {
+      throw new Error(`writable host path is not a directory: ${hostPath}`);
+    }
+  }
+  for (const guestPath of [
+    ...Object.keys(execPrograms),
+    ...Object.keys(guestFiles),
+    ...guestDirectories,
+  ]) {
+    const hiddenByHostMount = writableHostRoots.find((guestRoot) =>
+      pathWithin(guestPath, guestRoot),
+    );
+    if (hiddenByHostMount) {
+      throw new Error(
+        `guest path is hidden by writable host mount ${hiddenByHostMount}: ${guestPath}`,
+      );
+    }
     if (!writableRootFor(guestPath, writableGuestDirectories)) {
       validateGuestPath(guestPath, overlaidRoots);
     }
   }
-  for (const guestRoot of writableGuestDirectories) {
+  for (const guestRoot of writableRoots) {
     if (overlaidRoots.includes(guestRoot)) {
       throw new Error(
-        `writable guest directory conflicts with a runtime mount: ${guestRoot}`,
+        `writable guest mount conflicts with a runtime mount: ${guestRoot}`,
       );
     }
     if (guestRoot in guestFiles) {
       throw new Error(`guest path is both a file and directory: ${guestRoot}`);
+    }
+    if (guestRoot in execPrograms) {
+      throw new Error(
+        `guest path is both an executable and directory: ${guestRoot}`,
+      );
+    }
+  }
+  for (const guestPath of Object.keys(execPrograms)) {
+    if (guestPath in guestFiles) {
+      throw new Error(`guest path is both a file and executable: ${guestPath}`);
     }
   }
   for (const guestDirectory of guestDirectories) {
     if (guestDirectory in guestFiles) {
       throw new Error(
         `guest path is both a file and directory: ${guestDirectory}`,
+      );
+    }
+    if (guestDirectory in execPrograms) {
+      throw new Error(
+        `guest path is both an executable and directory: ${guestDirectory}`,
       );
     }
   }
@@ -209,17 +265,32 @@ async function main(): Promise<void> {
   );
   const guestEnv = config.env ?? {};
   const env = Object.entries(guestEnv).map(([key, value]) => `${key}=${value}`);
-  if (!("PATH" in guestEnv)) env.push("PATH=/usr/local/bin:/usr/bin:/bin");
+  if (!("PATH" in guestEnv)) {
+    env.push(`PATH=${guestEnv.KERNEL_PATH ?? "/usr/local/bin:/usr/bin:/bin"}`);
+  }
 
   let writableHostRoot: string | undefined;
   try {
-    const stagedFiles = Object.entries(guestFiles)
+    const stagedFiles = [
+      ...Object.entries(guestFiles).map(([guestPath, hostPath]) => ({
+        guestPath,
+        hostPath,
+        mode: 0o644,
+      })),
+      ...Object.entries(execPrograms).map(([guestPath, hostPath]) => ({
+        guestPath,
+        hostPath,
+        mode: 0o755,
+      })),
+    ]
       .filter(
-        ([guestPath]) => !writableRootFor(guestPath, writableGuestDirectories),
+        ({ guestPath }) =>
+          !writableRootFor(guestPath, writableGuestDirectories),
       )
-      .map(([guestPath, hostPath]) => ({
+      .map(({ guestPath, hostPath, mode }) => ({
         guestPath,
         bytes: readFileSync(hostPath),
+        mode,
       }));
     const stagedDirectories = guestDirectories.filter(
       (guestPath) => !writableRootFor(guestPath, writableGuestDirectories),
@@ -237,7 +308,7 @@ async function main(): Promise<void> {
         createGuestDirectory(rootfs, guestDirectory);
       }
       for (const entry of stagedFiles) {
-        writeGuestFile(rootfs, entry.guestPath, entry.bytes);
+        writeGuestFile(rootfs, entry.guestPath, entry.bytes, entry.mode);
       }
       rootfsImage = await rootfs.saveImage();
     }
@@ -246,7 +317,9 @@ async function main(): Promise<void> {
       mountPoint: string;
       hostPath: string;
       readonly: boolean;
-    }> = [];
+    }> = Object.entries(writableHostDirectories).map(
+      ([mountPoint, hostPath]) => ({ mountPoint, hostPath, readonly: false }),
+    );
     if (writableGuestDirectories.length > 0) {
       // Keep mutable test state off the readonly root image. A single host
       // instance and mount set is reused by both spawns, matching session state.
@@ -273,7 +346,19 @@ async function main(): Promise<void> {
             });
           }
         }
-        for (const [guestPath, sourcePath] of Object.entries(guestFiles)) {
+        const mountedFiles = [
+          ...Object.entries(guestFiles).map(([guestPath, sourcePath]) => ({
+            guestPath,
+            sourcePath,
+            mode: 0o644,
+          })),
+          ...Object.entries(execPrograms).map(([guestPath, sourcePath]) => ({
+            guestPath,
+            sourcePath,
+            mode: 0o755,
+          })),
+        ];
+        for (const { guestPath, sourcePath, mode } of mountedFiles) {
           if (!pathWithin(guestPath, guestRoot)) continue;
 
           const relativePath = guestPath
@@ -281,13 +366,14 @@ async function main(): Promise<void> {
             .replace(/^\/+/, "");
           const destination = join(hostRoot, relativePath);
           mkdirSync(dirname(destination), { recursive: true, mode: 0o755 });
-          writeFileSync(destination, readFileSync(sourcePath), { mode: 0o644 });
+          writeFileSync(destination, readFileSync(sourcePath), { mode });
         }
       }
     }
 
     const host = new NodeKernelHost({
       maxWorkers: 4,
+      execPrograms,
       rootfsImage,
       extraMounts,
       onPtyOutput: (_pid: number, data: Uint8Array) =>

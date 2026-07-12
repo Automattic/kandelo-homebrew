@@ -465,11 +465,14 @@ module KandeloFormulaSupport
 
   # Run an interactive Wasm program through Kandelo's real PTY path. Inputs
   # are written in order after the process starts, with short delays so curses
-  # applications can render and transition between prompts. Writable guest
-  # directories use isolated mounts that survive every spawn in this run.
+  # applications can render and transition between prompts. `exec_programs:`
+  # stages explicit guest exec targets. Writable guest directories use
+  # isolated mounts that survive every spawn in this run, while
+  # `writable_host_directories:` exposes caller-owned output directories.
   def kandelo_run_pty_wasm(
-    bin_path, argv, inputs:, argv0: nil, env: {}, guest_files: {}, guest_directories: [],
-    writable_guest_directories: [], rerun_inputs: nil, expected_status: 0,
+    bin_path, argv, inputs:, argv0: nil, env: {}, exec_programs: {}, guest_files: {},
+    guest_directories: [], writable_guest_directories: [], writable_host_directories: {},
+    rerun_inputs: nil, expected_status: 0,
     initial_delay_ms: 500, input_delay_ms: 180, cols: 100, rows: 30
   )
     root = kandelo_require_root!
@@ -490,9 +493,11 @@ module KandeloFormulaSupport
       env:                      env,
       inputs:                   inputs,
       rerunInputs:              rerun_inputs,
+      execPrograms:             exec_programs.transform_values(&:to_s),
       guestFiles:               guest_files.transform_values(&:to_s),
       guestDirectories:         guest_directories.map(&:to_s),
       writableGuestDirectories: writable_guest_directories.map(&:to_s),
+      writableHostDirectories:  writable_host_directories.transform_values(&:to_s),
       initialDelayMs:           initial_delay_ms,
       inputDelayMs:             input_delay_ms,
       cols:                     cols,
