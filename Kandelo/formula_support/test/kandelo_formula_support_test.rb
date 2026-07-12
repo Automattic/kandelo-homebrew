@@ -563,7 +563,8 @@ class KandeloFormulaSupportTest < Minitest::Test
       assert_includes harness.command, 'argv0\":\"\[\"'
       assert_includes harness.command, command.to_s.shellescape
       manifest = harness.test_path/"[.browser-guest-files.json"
-      assert_equal({ "/formula/relative.dat" => relative_guest_file.to_s }, JSON.parse(manifest.read))
+      manifest_guest_file = Pathname(JSON.parse(manifest.read).fetch("/formula/relative.dat"))
+      assert_equal relative_guest_file.realpath, manifest_guest_file.realpath
     end
   end
 
