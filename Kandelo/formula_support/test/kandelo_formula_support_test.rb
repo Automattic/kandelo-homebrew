@@ -13,7 +13,7 @@ class KandeloFormulaSupportTest < Minitest::Test
   class Harness
     include KandeloFormulaSupport
 
-    attr_accessor :build_path, :nix_path, :prefix_path, :root_path, :test_path
+    attr_accessor :build_path, :nix_path, :prefix_path, :root_path, :shell_result, :test_path
     attr_reader :command, :expected_status, :recorded_launcher, :system_args, :system_calls
 
     def kandelo_require_root!
@@ -43,7 +43,7 @@ class KandeloFormulaSupportTest < Minitest::Test
     def shell_output(command, expected_status = 0)
       @command = command
       @expected_status = expected_status
-      "runtime-ok\n"
+      shell_result || "runtime-ok\n"
     end
 
     def odie(message)
@@ -516,6 +516,64 @@ class KandeloFormulaSupportTest < Minitest::Test
 
     assert_equal "runtime-ok\n", output
     assert_equal 2, harness.expected_status
+  end
+
+  def test_http_service_execution_uses_isolated_runner_and_removes_stale_host_dist
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      root = Pathname(dir)/"kandelo root"
+      host_dist = root/"host/dist"
+      host_dist.mkpath
+      (host_dist/"stale.js").binwrite("stale")
+      server = Pathname(dir)/"server"
+      server.binwrite("\0asm")
+
+      harness = Harness.new
+      harness.root_path = root.to_s
+      harness.test_path = Pathname(dir)/"formula test"
+      harness.test_path.mkpath
+      harness.shell_result = '[{"status":200,"text":"service-ok"}]'
+
+      responses = harness.kandelo_run_http_service(
+        server,
+        ["-c", "/etc/server.conf"],
+        port:     8080,
+        requests: [{ path: "/health", headers: { "Host" => "localhost" } }],
+        mounts:   { "/opt/server" => "/tmp/server keg" },
+        env:      { "KERNEL_CWD" => "/opt/server" },
+        uid:      1000,
+        gid:      1000,
+      )
+
+      assert_equal [{ "status" => 200, "text" => "service-ok" }], responses
+      assert_includes harness.command, "run-http-service-wasm.ts"
+      assert_includes harness.command, "KANDELO_FORMULA_HTTP_SERVICE_JSON="
+      assert_includes harness.command, "KANDELO_FORMULA_GUEST_ENV_JSON="
+      assert_includes harness.command, "server.service.wasm"
+      assert_includes harness.command, "server\\ keg"
+      assert_includes harness.command, "1000"
+      assert_equal "kandelo_run_http_service", harness.recorded_launcher
+      assert_equal "\0asm", (harness.test_path/"server.service.wasm").binread
+      refute_path_exists host_dist
+    end
+  end
+
+  def test_http_service_execution_rejects_invalid_request_contract
+    error = assert_raises(RuntimeError) do
+      Harness.new.kandelo_run_http_service("server.wasm", [], port: 0, requests: [{ path: "/" }])
+    end
+    assert_equal "HTTP service port must be an integer from 1 through 65535", error.message
+
+    error = assert_raises(RuntimeError) do
+      Harness.new.kandelo_run_http_service("server.wasm", [], port: 8080, requests: [])
+    end
+    assert_equal "HTTP service requests must be a nonempty array", error.message
+
+    error = assert_raises(RuntimeError) do
+      Harness.new.kandelo_run_http_service(
+        "server.wasm", [], port: 8080, requests: [{ path: "/" }], timeout: 0
+      )
+    end
+    assert_equal "HTTP service timeout must be a positive number", error.message
   end
 
   def test_browser_execution_uses_focused_chromium_runner_and_removes_stale_host_dist
