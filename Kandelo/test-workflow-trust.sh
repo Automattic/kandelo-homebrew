@@ -10,12 +10,16 @@ fail() {
   exit 1
 }
 
+workflow_uses_actions_cache() {
+  grep -Eq "uses:[[:space:]]+['\"]?actions/cache(/restore)?@" "$@"
+}
+
 for workflow in "$DRY_RUN" "$PUBLISH"; do
   grep -Fx '  repository_dispatch:' "$workflow" >/dev/null ||
     fail "$(basename "$workflow") is not default-branch dispatched"
   ! grep -Fx '  workflow_dispatch:' "$workflow" >/dev/null ||
     fail "$(basename "$workflow") can execute a branch-selected workflow definition"
-  ! grep -Eq 'uses:[[:space:]]+actions/cache(/restore)?@' "$workflow" ||
+  ! workflow_uses_actions_cache "$workflow" ||
     fail "$(basename "$workflow") restores caller-writable cache state"
   ! grep -F 'secrets: inherit' "$workflow" >/dev/null ||
     fail "$(basename "$workflow") passes repository secrets to executable refs"
@@ -23,7 +27,10 @@ for workflow in "$DRY_RUN" "$PUBLISH"; do
     fail "$(basename "$workflow") does not assert the default-branch event invariant"
 done
 
-! grep -Eq '^[[:space:]]+(contents|packages): write$' "$DRY_RUN" ||
+printf '%s\n' 'uses: "actions/cache/restore@v4"' | workflow_uses_actions_cache ||
+  fail "cache detector misses quoted restore actions"
+
+! grep -Eq '(^|[[:space:]])write(-all)?([[:space:]#},]|$)' "$DRY_RUN" ||
   fail "dry-run workflow grants write authority"
 grep -Fx '      dry-run: true' "$DRY_RUN" >/dev/null ||
   fail "dry-run caller does not pass literal dry-run mode"
