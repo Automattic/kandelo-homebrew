@@ -1,4 +1,4 @@
-require_relative "../Kandelo/formula_support/kandelo_formula_support"
+require (Tap.fetch("automattic", "kandelo-homebrew").path/"Kandelo/formula_support/kandelo_formula_support").to_s
 
 class Pcre2 < Formula
   include KandeloFormulaSupport
@@ -10,7 +10,7 @@ class Pcre2 < Formula
   license "BSD-3-Clause"
 
   depends_on "binaryen" => :build
-  depends_on "pkgconf" => :build
+  depends_on "pkgconf" => [:build, :test]
   depends_on "wabt" => :build
 
   skip_clean "bin", "lib/libpcre2-8.a", "lib/libpcre2-16.a", "lib/libpcre2-32.a",
