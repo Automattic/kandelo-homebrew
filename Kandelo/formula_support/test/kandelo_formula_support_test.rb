@@ -101,9 +101,11 @@ class KandeloFormulaSupportTest < Minitest::Test
       harness = Harness.new
       wasm = Pathname(dir)/"program.wasm"
       wasm.binwrite("linked")
+      wasm.chmod 0751
 
       assert_equal wasm, harness.kandelo_fork_instrument(wasm)
       assert_equal "instrumented", wasm.binread
+      assert_equal 0751, wasm.stat.mode & 0777
       assert_equal "/tmp/kandelo root/scripts/run-wasm-fork-instrument.sh", harness.system_args.first
       assert_equal [wasm.to_s, "-o", "#{wasm}.fork-instrumented"], harness.system_args.drop(1)
       refute File.exist?("#{wasm}.fork-instrumented")

@@ -209,6 +209,7 @@ module KandeloFormulaSupport
 
     system "#{root}/scripts/run-wasm-fork-instrument.sh", wasm.to_s,
            "-o", instrumented.to_s
+    instrumented.chmod(wasm.stat.mode & 07777)
     instrumented.rename(wasm)
     wasm
   ensure
