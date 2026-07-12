@@ -13,8 +13,8 @@ class KandeloFormulaSupportTest < Minitest::Test
   class Harness
     include KandeloFormulaSupport
 
-    attr_accessor :build_path, :nix_path, :root_path, :test_path
-    attr_reader :command, :expected_status, :recorded_launcher, :system_args
+    attr_accessor :build_path, :nix_path, :prefix_path, :root_path, :test_path
+    attr_reader :command, :expected_status, :recorded_launcher, :system_args, :system_calls
 
     def kandelo_require_root!
       root_path || "/tmp/kandelo root"
@@ -26,6 +26,10 @@ class KandeloFormulaSupportTest < Minitest::Test
 
     def buildpath
       build_path || testpath
+    end
+
+    def prefix
+      prefix_path || Pathname("/tmp/formula prefix")
     end
 
     def kandelo_nix_executable
@@ -49,9 +53,12 @@ class KandeloFormulaSupportTest < Minitest::Test
     # The Formula double must intercept Kernel#system under its real name.
     # rubocop:disable Naming/PredicateMethod
     def system(*args)
+      @system_calls ||= []
+      @system_calls << args
       @system_args = args
-      output = args.fetch(args.index("-o") + 1)
-      File.binwrite(output, "instrumented")
+      if (output_index = args.index("-o"))
+        File.binwrite(args.fetch(output_index + 1), "instrumented")
+      end
       true
     end
     # rubocop:enable Naming/PredicateMethod
@@ -59,6 +66,17 @@ class KandeloFormulaSupportTest < Minitest::Test
     def kandelo_record_node_execution!(_wasm_path, _argv, launcher: "kandelo_run_wasm")
       @recorded_launcher = launcher
       nil
+    end
+  end
+
+  # Executes validator commands with a controlled PATH for fail-closed tests.
+  class ExecutingHarness < Harness
+    attr_accessor :system_path
+
+    def system(*args)
+      return true if Kernel.system({ "PATH" => system_path }, *args)
+
+      raise "command failed: #{args.join(" ")}"
     end
   end
 
@@ -82,6 +100,124 @@ class KandeloFormulaSupportTest < Minitest::Test
       assert_equal [wasm.to_s, "-o", "#{wasm}.fork-instrumented"], harness.system_args.drop(1)
       refute File.exist?("#{wasm}.fork-instrumented")
     end
+  end
+
+  def test_artifact_validation_requires_abi_asyncify_and_fork_guards
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      harness = artifact_validation_harness(dir)
+      wasm = harness.buildpath/"program.wasm"
+      wasm.binwrite("\0asm")
+
+      assert_equal wasm, harness.kandelo_validate_wasm_artifact(wasm, fork: :required)
+      command = harness.system_args.fetch(2)
+      assert_includes command, "wasm_current_abi_version"
+      assert_includes command, "wasm_extract_abi_version"
+      assert_includes command, "wasm_require_no_legacy_asyncify"
+      assert_includes command, "wasm_imports_kernel_fork"
+      assert_includes command, "wasm_has_complete_fork_instrumentation"
+      assert_includes command, "for tool in wasm-objdump wasm-dis"
+    end
+  end
+
+  def test_artifact_validation_enforces_fork_free_policy
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      harness = artifact_validation_harness(dir)
+      wasm = harness.buildpath/"program.wasm"
+      wasm.binwrite("\0asm")
+
+      harness.kandelo_validate_wasm_artifact(wasm, fork: :forbidden)
+      command = harness.system_args.fetch(2)
+      assert_includes command, "fork-free artifact imports kernel.kernel_fork"
+      assert_includes command, "wasm_require_no_fork_instrumentation"
+    end
+  end
+
+  def test_artifact_validation_rejects_staging_and_host_paths
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      harness = artifact_validation_harness(dir)
+      wasm = harness.buildpath/"program.wasm"
+      wasm.binwrite("debug path: #{harness.prefix}")
+
+      error = assert_raises(RuntimeError) do
+        harness.kandelo_validate_wasm_artifact(wasm)
+      end
+      assert_includes error.message, harness.prefix.to_s
+
+      wasm.binwrite("debug path: /home/runner/work/kandelo/build")
+      error = assert_raises(RuntimeError) do
+        harness.kandelo_validate_wasm_artifact(wasm)
+      end
+      assert_includes error.message, "host workspace path"
+    end
+  end
+
+  def test_artifact_validation_allows_stable_guest_opt_paths
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      harness = artifact_validation_harness(dir)
+      wasm = harness.buildpath/"program.wasm"
+      wasm.binwrite("/home/linuxbrew/.linuxbrew/opt/formula")
+
+      assert_equal wasm, harness.kandelo_validate_wasm_artifact(wasm)
+    end
+  end
+
+  def test_artifact_validation_requires_wasm_objdump
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      harness = artifact_validation_harness(dir, ExecutingHarness)
+      harness.system_path = "/bin:/usr/bin"
+      wasm = harness.buildpath/"program.wasm"
+      wasm.binwrite("\0asm")
+
+      assert_raises(RuntimeError) do
+        harness.kandelo_validate_wasm_artifact(wasm)
+      end
+    end
+  end
+
+  def test_artifact_validation_requires_wasm_dis
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      harness = artifact_validation_harness(dir, ExecutingHarness)
+      tool_dir = Pathname(dir)/"tools"
+      tool_dir.mkpath
+      wasm_objdump = tool_dir/"wasm-objdump"
+      wasm_objdump.binwrite("#!/bin/sh\nexit 0\n")
+      wasm_objdump.chmod 0755
+      harness.system_path = "#{tool_dir}:/bin:/usr/bin"
+      wasm = harness.buildpath/"program.wasm"
+      wasm.binwrite("\0asm")
+
+      assert_raises(RuntimeError) do
+        harness.kandelo_validate_wasm_artifact(wasm)
+      end
+    end
+  end
+
+  def test_artifact_validation_rejects_failed_wasm_objdump_inspection
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      harness = artifact_validation_harness(dir, ExecutingHarness)
+      tool_dir = Pathname(dir)/"tools"
+      tool_dir.mkpath
+      { "wasm-objdump" => 1, "wasm-dis" => 0 }.each do |name, status|
+        tool = tool_dir/name
+        tool.binwrite("#!/bin/sh\nexit #{status}\n")
+        tool.chmod 0755
+      end
+      harness.system_path = "#{tool_dir}:/bin:/usr/bin"
+      wasm = harness.buildpath/"program.wasm"
+      wasm.binwrite("\0asm")
+
+      assert_raises(RuntimeError) do
+        harness.kandelo_validate_wasm_artifact(wasm)
+      end
+    end
+  end
+
+  def test_artifact_validation_rejects_unknown_fork_policy
+    error = assert_raises(RuntimeError) do
+      Harness.new.kandelo_validate_wasm_artifact("program.wasm", fork: :sometimes)
+    end
+
+    assert_includes error.message, "invalid Kandelo fork policy"
   end
 
   def test_host_tool_reenters_the_dev_shell_and_preserves_the_caller_directory
@@ -471,5 +607,21 @@ class KandeloFormulaSupportTest < Minitest::Test
       assert_equal "kandelo_run_pty_wasm", harness.recorded_launcher
       refute_path_exists host_dist
     end
+  end
+
+  private
+
+  def artifact_validation_harness(dir, harness_class = Harness)
+    root = Pathname(dir)/"kandelo root"
+    build = Pathname(dir)/"build"
+    (root/"scripts").mkpath
+    build.mkpath
+    (root/"scripts/wasm-artifact-guards.sh").binwrite("# validation fixture\n")
+
+    harness = harness_class.new
+    harness.root_path = root.to_s
+    harness.build_path = build
+    harness.prefix_path = Pathname(dir)/"cellar/formula/1.0"
+    harness
   end
 end

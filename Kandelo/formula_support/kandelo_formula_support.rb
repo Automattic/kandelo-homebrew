@@ -8,10 +8,10 @@ require "shellwords"
 # KandeloFormulaSupport is the single place Kandelo-specific mechanics live so
 # that formula bodies stay idiomatic Homebrew. It owns SDK/toolchain activation
 # (via the HOMEBREW_KANDELO_ROOT env bridge), the wasm cross-compile
-# environment, isolated native build tools, fork instrumentation, the
-# transitional shell-out to a registry build script, installing a built `.wasm`
-# as an executable, and running a `.wasm` under the Node kernel host for
-# `test do`.
+# environment, isolated native build tools, fork instrumentation, final Wasm
+# artifact validation, the transitional shell-out to a registry build script,
+# installing a built `.wasm` as an executable, and running a `.wasm` under
+# the Node kernel host for `test do`.
 #
 # See docs/plans/2026-07-05-homebrew-tap-layout-idiomatic-spec.md (Track A0) for
 # the contract this implements. The `kandelo_build_package` shell-out is the
@@ -186,6 +186,91 @@ module KandeloFormulaSupport
     wasm
   ensure
     instrumented&.delete if instrumented&.exist?
+  end
+
+  # Reject a final linked artifact unless its ABI and continuation surface
+  # match the Kandelo checkout that is building it. Callers must declare WABT
+  # and Binaryen as build dependencies because the authoritative guards inspect
+  # Wasm sections with wasm-objdump and fall back to wasm-dis for newer opcodes.
+  def kandelo_validate_wasm_artifact(wasm_path, fork: :auto, forbidden_paths: [])
+    unless [:auto, :required, :forbidden].include?(fork)
+      odie "invalid Kandelo fork policy #{fork.inspect}; expected :auto, :required, or :forbidden"
+    end
+
+    root = kandelo_require_root!
+    wasm = Pathname(wasm_path)
+    artifact_guards = Pathname(root)/"scripts/wasm-artifact-guards.sh"
+    odie "Kandelo artifact guards not found at #{artifact_guards}" unless artifact_guards.file?
+
+    fork_guard = case fork
+    when :required
+      <<~SH
+        if ! wasm_imports_kernel_fork "$artifact"; then
+          echo "ERROR: required fork-capable artifact does not import kernel.kernel_fork: $artifact" >&2
+          exit 1
+        fi
+        if ! wasm_has_complete_fork_instrumentation "$artifact"; then
+          echo "ERROR: required fork-capable artifact has incomplete instrumentation: $artifact" >&2
+          exit 1
+        fi
+      SH
+    when :forbidden
+      <<~SH
+        if wasm_imports_kernel_fork "$artifact"; then
+          echo "ERROR: fork-free artifact imports kernel.kernel_fork: $artifact" >&2
+          exit 1
+        fi
+        wasm_require_no_fork_instrumentation "$artifact"
+      SH
+    else
+      <<~SH
+        if wasm_imports_kernel_fork "$artifact"; then
+          if ! wasm_has_complete_fork_instrumentation "$artifact"; then
+            echo "ERROR: fork-capable artifact has incomplete instrumentation: $artifact" >&2
+            exit 1
+          fi
+        else
+          wasm_require_no_fork_instrumentation "$artifact"
+        fi
+      SH
+    end
+
+    system "bash", "-c", <<~SH
+      set -euo pipefail
+      for tool in wasm-objdump wasm-dis; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+          echo "ERROR: required Kandelo artifact inspection tool is unavailable: $tool" >&2
+          exit 1
+        fi
+      done
+      . #{artifact_guards.to_s.shellescape}
+      artifact=#{wasm.to_s.shellescape}
+      if ! wasm-objdump -x "$artifact" >/dev/null 2>&1; then
+        echo "ERROR: wasm-objdump could not inspect artifact imports and exports: $artifact" >&2
+        exit 1
+      fi
+      expected_abi=$(wasm_current_abi_version #{root.to_s.shellescape} || true)
+      artifact_abi=$(wasm_extract_abi_version "$artifact" || true)
+      if [ -z "$expected_abi" ] || [ -z "$artifact_abi" ] || [ "$artifact_abi" != "$expected_abi" ]; then
+        echo "ERROR: artifact ABI ${artifact_abi:-missing} does not match Kandelo ABI ${expected_abi:-missing}: $artifact" >&2
+        exit 1
+      fi
+      wasm_require_no_legacy_asyncify "$artifact"
+      #{fork_guard}
+    SH
+
+    contents = wasm.binread
+    staging_paths = [buildpath, root]
+    staging_paths << prefix if respond_to?(:prefix)
+    staging_paths.concat(forbidden_paths)
+    staging_paths.compact.map(&:to_s).reject(&:empty?).uniq.each do |path|
+      odie "Wasm artifact embeds staging path #{path}: #{wasm}" if contents.include?(path)
+    end
+    if contents.match?(%r{/(?:private/tmp/|Users/|home/runner/(?:_work|work)/|nix/store/)})
+      odie "Wasm artifact embeds a host workspace path: #{wasm}"
+    end
+
+    wasm
   end
 
   # Transitional Tier-2 bridge (spec §6 deviation): activate the SDK, export the
