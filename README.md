@@ -44,6 +44,8 @@ Current migration controls and pilots include:
 - `file`, compression-aware file type identification backed by the complete
   `libmagic` database;
 - `zip` and `unzip`, the security-patched Info-ZIP creation, extraction, and inspection tools.
+- `ncompress`, the upstream LZW `compress`, `uncompress`, and `zcat` tools
+  replacing the compact base-image fallback.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node
