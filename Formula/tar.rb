@@ -48,10 +48,10 @@ class Tar < Formula
     (source/"nested").mkpath
     (source/"nested/beta.txt").write "beta\n"
 
-    gzip = testpath/"gzip"
-    gzip.binwrite((formula_opt_bin("automattic/kandelo-homebrew/gzip")/"gzip").binread)
-    gzip.chmod 0755
-    env = { "KERNEL_CWD" => testpath, "KERNEL_PATH" => testpath }
+    gzip = formula_opt_bin("automattic/kandelo-homebrew/gzip")/"gzip"
+    env = { "KERNEL_CWD" => "/work", "KERNEL_PATH" => "/bin" }
+    mount = { "/work" => testpath }
+    exec_programs = { "/bin/gzip" => gzip }
 
     tar_binary = (bin/"tar").binread
     assert_includes tar_binary, "#{GUEST_OPT_PREFIX}/libexec/rmt"
@@ -63,8 +63,12 @@ class Tar < Formula
     assert_match(/^rmt \(GNU tar\) 1\.35$/,
       kandelo_run_wasm(libexec/"rmt", ["--version"]).lines.first.chomp)
 
-    kandelo_run_wasm(bin/"tar", ["-cf", "archive.tar", "source"], env: env)
-    listing = kandelo_run_wasm(bin/"tar", ["-tf", "archive.tar"], env: env)
+    kandelo_run_wasm(
+      bin/"tar", ["-cf", "archive.tar", "source"], env: env, writable_host_directories: mount
+    )
+    listing = kandelo_run_wasm(
+      bin/"tar", ["-tf", "archive.tar"], env: env, writable_host_directories: mount
+    )
     expected_entries = [
       "source/",
       "source/alpha.txt",
@@ -73,16 +77,39 @@ class Tar < Formula
     ]
     assert_equal expected_entries.sort, listing.lines.map(&:chomp).sort
 
-    kandelo_run_wasm(bin/"tar", ["-xf", "archive.tar", "-C", "extracted"], env: env)
+    kandelo_run_wasm(
+      bin/"tar",
+      ["-xf", "archive.tar", "-C", "extracted"],
+      env:                       env,
+      writable_host_directories: mount,
+    )
     assert_equal "alpha\n", (extracted/"source/alpha.txt").read
     assert_equal "beta\n", (extracted/"source/nested/beta.txt").read
 
-    kandelo_run_wasm(bin/"tar", ["-czf", "archive.tar.gz", "source"], env: env)
+    kandelo_run_wasm(
+      bin/"tar", ["-czf", "archive.tar.gz", "source"],
+      env:                       env,
+      exec_programs:             exec_programs,
+      writable_host_directories: mount,
+      expected_fork_descendants: 1
+    )
     assert_equal [0x1f, 0x8b], (testpath/"archive.tar.gz").binread(2).bytes
-    gzip_listing = kandelo_run_wasm(bin/"tar", ["-tzf", "archive.tar.gz"], env: env)
+    gzip_listing = kandelo_run_wasm(
+      bin/"tar", ["-tzf", "archive.tar.gz"],
+      env:                       env,
+      exec_programs:             exec_programs,
+      writable_host_directories: mount,
+      expected_fork_descendants: 1
+    )
     assert_equal expected_entries.sort, gzip_listing.lines.map(&:chomp).sort
 
-    kandelo_run_wasm(bin/"tar", ["-xzf", "archive.tar.gz", "-C", "gzip-extracted"], env: env)
+    kandelo_run_wasm(
+      bin/"tar", ["-xzf", "archive.tar.gz", "-C", "gzip-extracted"],
+      env:                       env,
+      exec_programs:             exec_programs,
+      writable_host_directories: mount,
+      expected_fork_descendants: 1
+    )
     assert_equal "alpha\n", (gzip_extracted/"source/alpha.txt").read
     assert_equal "beta\n", (gzip_extracted/"source/nested/beta.txt").read
   end
