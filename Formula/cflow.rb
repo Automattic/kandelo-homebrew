@@ -34,8 +34,6 @@ class Cflow < Formula
         ]
       end
       ENV["CFLAGS"] = ["-O2", "-gline-tables-only", *prefix_maps].join(" ")
-      # The SDK site owns target facts; this gnulib runtime probe is package-specific.
-      ENV["gl_cv_func_strerror_0_works"] = "yes"
 
       system kandelo_configure(root),
         "--prefix=#{GUEST_OPT_PREFIX}",
