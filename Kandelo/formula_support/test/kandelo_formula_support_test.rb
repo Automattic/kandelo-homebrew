@@ -827,22 +827,6 @@ class KandeloFormulaSupportTest < Minitest::Test
     end
   end
 
-  private
-
-  def artifact_validation_harness(dir, harness_class = Harness)
-    root = Pathname(dir)/"kandelo root"
-    build = Pathname(dir)/"build"
-    (root/"scripts").mkpath
-    build.mkpath
-    (root/"scripts/wasm-artifact-guards.sh").binwrite("# validation fixture\n")
-
-    harness = harness_class.new
-    harness.root_path = root.to_s
-    harness.build_path = build
-    harness.prefix_path = Pathname(dir)/"cellar/formula/1.0"
-    harness
-  end
-
   def test_virtual_network_pairs_accept_separate_server_and_client_programs
     harness = Harness.new
     harness.kandelo_run_virtual_network_pairs(
@@ -861,5 +845,21 @@ class KandeloFormulaSupportTest < Minitest::Test
     assert_includes harness.command, "server.wasm client.wasm"
     assert_includes harness.command, "expectedServerStdoutIncludes"
     assert_includes harness.command, "expectedClientStdoutIncludes"
+  end
+
+  private
+
+  def artifact_validation_harness(dir, harness_class = Harness)
+    root = Pathname(dir)/"kandelo root"
+    build = Pathname(dir)/"build"
+    (root/"scripts").mkpath
+    build.mkpath
+    (root/"scripts/wasm-artifact-guards.sh").binwrite("# validation fixture\n")
+
+    harness = harness_class.new
+    harness.root_path = root.to_s
+    harness.build_path = build
+    harness.prefix_path = Pathname(dir)/"cellar/formula/1.0"
+    harness
   end
 end

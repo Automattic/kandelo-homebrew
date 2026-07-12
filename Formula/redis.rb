@@ -1,4 +1,4 @@
-require_relative "../Kandelo/formula_support/kandelo_formula_support"
+require (Tap.fetch("automattic", "kandelo-homebrew").path/"Kandelo/formula_support/kandelo_formula_support").to_s
 
 class Redis < Formula
   include KandeloFormulaSupport
@@ -24,7 +24,15 @@ class Redis < Formula
     kandelo_require_arch!("wasm32")
 
     kandelo_wasm_build do |root|
-      ENV["CFLAGS"] = "-O2 -gline-tables-only -fdebug-compilation-dir=."
+      prefix_maps = [
+        "-ffile-prefix-map=#{buildpath}=/usr/src/redis",
+        "-fdebug-prefix-map=#{buildpath}=/usr/src/redis",
+        "-fmacro-prefix-map=#{buildpath}=/usr/src/redis",
+        "-ffile-prefix-map=#{root}=/usr/src/kandelo",
+        "-fdebug-prefix-map=#{root}=/usr/src/kandelo",
+        "-fmacro-prefix-map=#{root}=/usr/src/kandelo",
+      ]
+      ENV["CFLAGS"] = ["-O2", "-gline-tables-only", "-fdebug-compilation-dir=.", *prefix_maps].join(" ")
 
       # Redis' Makefiles inspect the build host with uname even while using a
       # cross compiler. Select the Linux-compatible target link set so pthread,
@@ -66,24 +74,22 @@ class Redis < Formula
       optimized_server = buildpath/"src/redis-server.optimized"
       optimized_cli = buildpath/"src/redis-cli.optimized"
       instrumented_server = buildpath/"src/redis-server.instrumented"
-      system "wasm-opt", "-O2", buildpath/"src/redis-server", "-o", optimized_server
-      system "wasm-opt", "-O2", buildpath/"src/redis-cli", "-o", optimized_cli
+      # Linked SDK glue contributes DWARF from its own build. These release
+      # executables have no detached debug companion, so do not ship that
+      # host-specific debug metadata in either artifact.
+      system "wasm-opt", "-O2", "--strip-debug", buildpath/"src/redis-server", "-o", optimized_server
+      system "wasm-opt", "-O2", "--strip-debug", buildpath/"src/redis-cli", "-o", optimized_cli
       system "#{root}/scripts/run-wasm-fork-instrument.sh",
         optimized_server, "-o", instrumented_server
 
-      artifact_guards = "#{root}/scripts/wasm-artifact-guards.sh"
+      kandelo_validate_wasm_artifact(instrumented_server, fork: :required)
+      kandelo_validate_wasm_artifact(optimized_cli, fork: :forbidden)
+
+      # Redis uses Kandelo's supported dynamic-loader bridge. Reject every
+      # other env import so a suppressed dependency-build failure stays loud.
       system "bash", "-c", <<~SH
         set -euo pipefail
-        . #{artifact_guards.shellescape}
-        expected_abi=$(wasm_current_abi_version #{root.to_s.shellescape})
         for artifact in #{instrumented_server.to_s.shellescape} #{optimized_cli.to_s.shellescape}; do
-          artifact_abi=$(wasm_extract_abi_version "$artifact")
-          if [ -z "$expected_abi" ] || [ "$artifact_abi" != "$expected_abi" ]; then
-            echo "ERROR: Redis ABI $artifact_abi does not match Kandelo ABI $expected_abi: $artifact" >&2
-            exit 1
-          fi
-          wasm_require_no_legacy_asyncify "$artifact"
-          wasm_require_fork_instrumentation_if_needed "$artifact"
           unexpected_env_imports=$(wasm-objdump -x "$artifact" |
             awk '/<- env[.]/ { sub(/^.*<- env[.]/, ""); print $1 }' |
             grep -Ev '^(__channel_base|memory|__wasm_dlclose|__wasm_dlerror|__wasm_dlopen|__wasm_dlsym)$' || true)
@@ -93,10 +99,6 @@ class Redis < Formula
             exit 1
           fi
         done
-        if ! wasm_has_complete_fork_instrumentation #{instrumented_server.to_s.shellescape}; then
-          echo "ERROR: redis-server has incomplete fork instrumentation" >&2
-          exit 1
-        fi
       SH
     end
 
