@@ -219,7 +219,7 @@ module KandeloFormulaSupport
   # Reject a final linked artifact unless its ABI and continuation surface
   # match the Kandelo checkout that is building it. Callers must declare WABT
   # and Binaryen as build dependencies because the authoritative guards inspect
-  # Wasm sections with wasm-objdump and fall back to wasm-dis for newer opcodes.
+  # Wasm sections with wasm-objdump and use Binaryen for fallback extraction.
   def kandelo_validate_wasm_artifact(wasm_path, fork: :auto, forbidden_paths: [])
     unless [:auto, :required, :forbidden].include?(fork)
       odie "invalid Kandelo fork policy #{fork.inspect}; expected :auto, :required, or :forbidden"
@@ -265,7 +265,7 @@ module KandeloFormulaSupport
 
     system "bash", "-c", <<~SH
       set -euo pipefail
-      for tool in wasm-objdump wasm-dis; do
+      for tool in wasm-objdump wasm-dis wasm-opt; do
         if ! command -v "$tool" >/dev/null 2>&1; then
           echo "ERROR: required Kandelo artifact inspection tool is unavailable: $tool" >&2
           exit 1
@@ -554,7 +554,7 @@ module KandeloFormulaSupport
     runner = Pathname(__dir__)/"run-kms-wasm.ts"
     command = [
       "node", "--experimental-wasm-exnref", "--import", "tsx/esm",
-      runner, root, wasm_path, JSON.generate(argv.map(&:to_s)), min_page_flips, timeout_ms,
+      runner, root, wasm_path, JSON.generate(argv.map(&:to_s)), min_page_flips, timeout_ms
     ].map { |arg| Shellwords.escape(arg.to_s) }.join(" ")
     output = shell_output("cd #{Shellwords.escape(root)} && #{command} < /dev/null")
     kandelo_record_node_execution!(wasm_path, argv, launcher: "kandelo_run_kms_wasm")
@@ -584,7 +584,7 @@ module KandeloFormulaSupport
     runner = Pathname(__dir__)/"run-kms-browser-wasm.ts"
     command = [
       "node", "--experimental-wasm-exnref", "--import", "tsx/esm",
-      runner, root, Pathname(bin_path), config,
+      runner, root, Pathname(bin_path), config
     ].map { |arg| Shellwords.escape(arg.to_s) }.join(" ")
 
     shell_output("cd #{Shellwords.escape(root)} && #{command} < /dev/null")

@@ -44,10 +44,6 @@ class KandeloFormulaSupportTest < Minitest::Test
       runtime_formulae || []
     end
 
-    def odie(message)
-      raise RuntimeError, message
-    end
-
     def shell_output(command, expected_status = 0)
       @command = command
       @expected_status = expected_status
@@ -125,7 +121,7 @@ class KandeloFormulaSupportTest < Minitest::Test
       assert_includes command, "wasm_require_no_legacy_asyncify"
       assert_includes command, "wasm_imports_kernel_fork"
       assert_includes command, "wasm_has_complete_fork_instrumentation"
-      assert_includes command, "for tool in wasm-objdump wasm-dis"
+      assert_includes command, "for tool in wasm-objdump wasm-dis wasm-opt"
     end
   end
 
@@ -202,12 +198,32 @@ class KandeloFormulaSupportTest < Minitest::Test
     end
   end
 
+  def test_artifact_validation_requires_wasm_opt
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      harness = artifact_validation_harness(dir, ExecutingHarness)
+      tool_dir = Pathname(dir)/"tools"
+      tool_dir.mkpath
+      ["wasm-objdump", "wasm-dis"].each do |name|
+        tool = tool_dir/name
+        tool.binwrite("#!/bin/sh\nexit 0\n")
+        tool.chmod 0755
+      end
+      harness.system_path = "#{tool_dir}:/bin:/usr/bin"
+      wasm = harness.buildpath/"program.wasm"
+      wasm.binwrite("\0asm")
+
+      assert_raises(RuntimeError) do
+        harness.kandelo_validate_wasm_artifact(wasm)
+      end
+    end
+  end
+
   def test_artifact_validation_rejects_failed_wasm_objdump_inspection
     Dir.mktmpdir("kandelo-formula-support") do |dir|
       harness = artifact_validation_harness(dir, ExecutingHarness)
       tool_dir = Pathname(dir)/"tools"
       tool_dir.mkpath
-      { "wasm-objdump" => 1, "wasm-dis" => 0 }.each do |name, status|
+      { "wasm-objdump" => 1, "wasm-dis" => 0, "wasm-opt" => 0 }.each do |name, status|
         tool = tool_dir/name
         tool.binwrite("#!/bin/sh\nexit #{status}\n")
         tool.chmod 0755
@@ -515,8 +531,8 @@ class KandeloFormulaSupportTest < Minitest::Test
     harness.kandelo_run_wasm(
       "program.wasm",
       ["input.tex"],
-      argv0:                       "/home/linuxbrew/.linuxbrew/opt/texlive/bin/pdflatex",
-      exec_programs:               {
+      argv0:                     "/home/linuxbrew/.linuxbrew/opt/texlive/bin/pdflatex",
+      exec_programs:             {
         "/home/linuxbrew/.linuxbrew/opt/texlive/bin/pdflatex" => "/formula/pdflatex",
       },
       writable_host_directories: { "/work" => "/formula/test-output" },
@@ -672,8 +688,10 @@ class KandeloFormulaSupportTest < Minitest::Test
 
       Dir.chdir(dir) do
         harness.kandelo_run_browser_wasm(
-          Pathname("["), ["value", "="], argv0: "[",
-          guest_files: { "/formula/relative.dat" => Pathname("relative.dat") }
+          Pathname("["),
+          ["value", "="],
+          argv0:       "[",
+          guest_files: { "/formula/relative.dat" => Pathname("relative.dat") },
         )
       end
 
