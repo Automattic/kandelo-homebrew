@@ -44,6 +44,8 @@ Current migration controls and pilots include:
 - `file`, compression-aware file type identification backed by the complete
   `libmagic` database;
 - `zip` and `unzip`, the security-patched Info-ZIP creation, extraction, and inspection tools.
+- `libiconv`, GNU's complete character-set conversion library and CLI,
+  replacing the compact base-image byte-copy fallback;
 - `ncompress`, the upstream LZW `compress`, `uncompress`, and `zcat` tools
   replacing the compact base-image fallback.
 
