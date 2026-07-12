@@ -34,12 +34,8 @@ class Tar < Formula
       tar = kandelo_fork_instrument(buildpath/"src/tar")
       kandelo_validate_wasm_artifact(tar, fork: :required)
       kandelo_validate_wasm_artifact(buildpath/"rmt/rmt", fork: :forbidden)
+      system "make", "install", "DEFAULT_RMT_DIR=#{libexec}"
     end
-
-    kandelo_install_bin(buildpath/"src", "tar", "tar")
-    rmt = buildpath/"rmt/rmt"
-    chmod 0755, rmt
-    libexec.install rmt
   end
 
   test do
@@ -61,6 +57,10 @@ class Tar < Formula
     tar_binary = (bin/"tar").binread
     assert_includes tar_binary, "#{GUEST_OPT_PREFIX}/libexec/rmt"
     refute_includes tar_binary, prefix.to_s
+    [man1/"tar.1", man8/"rmt.8", info/"tar.info", info/"tar.info-1",
+     info/"tar.info-2", info/"tar.info-3"].each do |document|
+      assert_path_exists document
+    end
     assert_match(/^rmt \(GNU tar\) 1\.35$/,
       kandelo_run_wasm(libexec/"rmt", ["--version"]).lines.first.chomp)
 
