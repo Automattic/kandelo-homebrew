@@ -14,7 +14,7 @@ class Zip < Formula
   depends_on "wabt" => :build
   depends_on "automattic/kandelo-homebrew/unzip"
 
-  skip_clean "bin/zip"
+  skip_clean "bin/zip", "bin/zipcloak", "bin/zipnote", "bin/zipsplit"
 
   # Upstream is unmaintained. Follow Homebrew's maintained formula and apply
   # Debian's security and reproducibility fixes at this upstream boundary.
@@ -59,10 +59,14 @@ class Zip < Formula
         "IZ_BZIP2=",
         "LIB_BZ=",
         "zips"
-      kandelo_validate_wasm_artifact(buildpath/"zip", fork: :forbidden)
+      %w[zip zipcloak zipnote zipsplit].each do |program|
+        kandelo_validate_wasm_artifact(buildpath/program, fork: :forbidden)
+      end
+      system "make", "-f", "unix/Makefile",
+        "BINDIR=#{bin}",
+        "MANDIR=#{man1}",
+        "install"
     end
-
-    kandelo_install_bin(buildpath, "zip", "zip")
   end
 
   test do
@@ -87,6 +91,18 @@ class Zip < Formula
 
     integrity = kandelo_run_wasm(bin/"zip", ["-T", "archive.zip"], env: cwd_env)
     assert_match(/test of archive\.zip OK/, integrity)
+
+    zipnote = kandelo_run_wasm(bin/"zipnote", ["archive.zip"], env: cwd_env)
+    assert_match(/^@ alpha\.txt$/, zipnote)
+    assert_match(%r{^@ nested/beta\.txt$}, zipnote)
+    assert_match(/ZipCloak 3\.0/, kandelo_run_wasm(bin/"zipcloak", ["-h"]))
+    assert_match(/ZipSplit 3\.0/, kandelo_run_wasm(bin/"zipsplit", ["-h"]))
+    assert_match(/1 zip files would be made/,
+      kandelo_run_wasm(bin/"zipsplit", ["-t", "archive.zip"], env: cwd_env))
+
+    %w[zip zipcloak zipnote zipsplit].each do |program|
+      assert_path_exists man1/"#{program}.1"
+    end
 
     nothing_to_do = kandelo_run_wasm(
       bin/"zip", ["empty.zip"], env: cwd_env, merge_stderr: true, expected_status: 12

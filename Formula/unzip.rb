@@ -13,7 +13,7 @@ class Unzip < Formula
   depends_on "binaryen" => :build
   depends_on "wabt" => :build
 
-  skip_clean "bin/unzip", "bin/funzip"
+  skip_clean "bin/unzip", "bin/funzip", "bin/unzipsfx", "bin/zipinfo"
 
   # Upstream is unmaintained. Follow Homebrew's maintained formula and apply
   # Ubuntu's complete security, correctness, and reproducibility quilt series.
@@ -88,13 +88,29 @@ class Unzip < Formula
         "CF=#{cflags.join(" ")}",
         "LF2=",
         "unzips"
-      kandelo_validate_wasm_artifact(buildpath/"unzip", fork: :forbidden)
-      kandelo_validate_wasm_artifact(buildpath/"funzip", fork: :forbidden)
+      %w[unzip funzip unzipsfx].each do |program|
+        kandelo_validate_wasm_artifact(buildpath/program, fork: :forbidden)
+      end
+      system "make", "-f", "unix/Makefile",
+        "BINDIR=#{bin}",
+        "MANDIR=#{man1}",
+        "install"
     end
 
-    kandelo_install_bin(buildpath, "unzip", "unzip")
-    kandelo_install_bin(buildpath, "funzip", "funzip")
-    bin.install_symlink "unzip" => "zipinfo"
+    # zipgrep relies on Kandelo's POSIX base shell, egrep, sed, and basename;
+    # same-keg unzip is its only non-base command.
+    File.open(man1/"unzipsfx.1", "a") do |manual|
+      manual.write <<~MANPAGE
+        .SH KANDELO WASM PACKAGING
+        A Kandelo self-extractor must remain a valid WebAssembly module, so a ZIP archive
+        cannot be concatenated directly to unzipsfx.  Use the Kandelo SDK toolchain to
+        embed the archive in a custom section:
+        .PP
+        .nf
+        llvm-objcopy --add-section kandelo.sfx=archive.zip unzipsfx.wasm output.wasm
+        .fi
+      MANPAGE
+    end
   end
 
   test do
@@ -124,6 +140,53 @@ class Unzip < Formula
     assert_equal "alpha.txt\nnested/beta.txt\n",
       kandelo_run_wasm(bin/"unzip", ["-Z", "-1", "fixture.zip"], env: cwd_env)
     assert_match(/^ZipInfo 3\.00/, kandelo_run_wasm(bin/"zipinfo", ["-h"], preserve_argv0: true))
+    assert_match(/^UnZipSFX 6\.00/, kandelo_run_wasm(bin/"unzipsfx", ["-h"]))
+
+    zipgrep = (bin/"zipgrep").read
+    assert_equal "#!/bin/sh\n", zipgrep.each_line.first
+    %w[egrep sed basename unzip].each { |command| assert_match(/\b#{command}\b/, zipgrep) }
+    %w[funzip unzip unzipsfx zipgrep zipinfo].each do |program|
+      assert_path_exists man1/"#{program}.1"
+    end
+    assert_includes (man1/"unzipsfx.1").read, "llvm-objcopy --add-section kandelo.sfx="
+
+    encode_uleb = lambda do |value|
+      encoded = +"".b
+      loop do
+        byte = value & 0x7f
+        value >>= 7
+        byte |= 0x80 unless value.zero?
+        encoded << byte
+        break if value.zero?
+      end
+      encoded
+    end
+    section_name = "kandelo.sfx".b
+    section_payload = encode_uleb.call(section_name.bytesize) + section_name + archive.binread
+    self_extractor = testpath/"fixture-sfx.wasm"
+    self_extractor.binwrite(
+      (bin/"unzipsfx").binread + "\0".b + encode_uleb.call(section_payload.bytesize) + section_payload,
+    )
+    self_extractor.chmod 0755
+    guest_sfx = "/tmp/fixture-sfx.wasm"
+    sfx_program = { guest_sfx => self_extractor }
+    sfx_listing = kandelo_run_wasm(
+      self_extractor, ["-t"], argv0: guest_sfx, exec_programs: sfx_program
+    )
+    assert_match(/testing: alpha\.txt/, sfx_listing)
+    assert_match(%r{testing: nested/beta\.txt}, sfx_listing)
+
+    sfx_extracted = testpath/"sfx-extracted"
+    sfx_extracted.mkpath
+    assert_empty kandelo_run_wasm(
+      self_extractor,
+      ["-q", "-d", "/work"],
+      argv0:                     guest_sfx,
+      exec_programs:             sfx_program,
+      writable_host_directories: { "/work" => sfx_extracted },
+    )
+    assert_equal "alpha from Kandelo\n" * 64, (sfx_extracted/"alpha.txt").read
+    assert_equal "beta from Kandelo\n" * 48, (sfx_extracted/"nested/beta.txt").read
 
     funzip_archive =
       "UEsDBBQAAAAIAAAAIVxY+qxoIAAAAMAEAAAJAAAAYWxwaGEudHh0S8wpyEhUSCvKz1XwTsxLSc3J50ocFRoV" \
