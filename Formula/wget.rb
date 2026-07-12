@@ -83,10 +83,13 @@ class Wget < Formula
       system "make", "-C", "src", "wget"
 
       artifact = kandelo_fork_instrument(buildpath/"src/wget")
+      host_only_paths = path_maps.filter_map do |source, destination|
+        source if source != destination
+      end
       kandelo_validate_wasm_artifact(
         artifact,
         fork:            :required,
-        forbidden_paths: [etc, openssl, zlib],
+        forbidden_paths: host_only_paths,
       )
     end
 
