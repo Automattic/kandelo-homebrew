@@ -8,16 +8,18 @@ require "shellwords"
 # KandeloFormulaSupport is the single place Kandelo-specific mechanics live so
 # that formula bodies stay idiomatic Homebrew. It owns SDK/toolchain activation
 # (via the HOMEBREW_KANDELO_ROOT env bridge), the wasm cross-compile
-# environment, isolated native build tools, fork instrumentation, final Wasm
-# artifact validation, the transitional shell-out to a registry build script,
-# installing a built `.wasm` as an executable, and running a `.wasm` under
-# the Node kernel host for `test do`.
+# environment, host/target dependency isolation, isolated native build tools,
+# fork instrumentation, final Wasm artifact validation, the transitional
+# shell-out to a registry build script, installing a built `.wasm` as an
+# executable, and running a `.wasm` under the Node kernel host for `test do`.
 #
 # See docs/plans/2026-07-05-homebrew-tap-layout-idiomatic-spec.md (Track A0) for
 # the contract this implements. The `kandelo_build_package` shell-out is the
 # accepted Tier-2 deviation (spec §6) for heavy ported formulae (ruby/perl/…)
 # whose 49 KB `build-<name>.sh` is not yet decomposed into idiomatic steps.
 module KandeloFormulaSupport
+  KANDELO_TAP_FORMULA_PREFIX = "automattic/kandelo-homebrew/"
+
   # Resolve the Kandelo checkout the SDK/toolchain lives in. Returns the path
   # string, or nil when the env bridge is not configured.
   def kandelo_root
@@ -145,10 +147,35 @@ module KandeloFormulaSupport
     Pathname("/nix/var/nix/profiles/default/bin/nix")
   end
 
+  # Homebrew assumes every dependency executable runs on the build host and
+  # adds every opt_bin to PATH. Kandelo tap runtime dependencies are target
+  # Wasm, so executing them during configure would cross the host/target
+  # boundary. Keep native build dependencies while removing target executable
+  # directories; Formulae still address target headers and libraries through
+  # their explicit formula_opt_prefix paths.
+  def kandelo_isolate_host_build_path!
+    runtime_dependencies = runtime_formula_dependencies(read_from_tab: false, undeclared: false)
+    target_dependencies = runtime_dependencies.select do |dependency|
+      dependency.full_name.start_with?(KANDELO_TAP_FORMULA_PREFIX)
+    end
+    target_paths = target_dependencies.flat_map do |dependency|
+      [dependency.opt_bin, dependency.opt_sbin, dependency.opt_libexec/"bin"]
+    end
+    target_paths.map! { |path| File.expand_path(path.to_s) }
+
+    return if target_paths.empty?
+
+    entries = ENV.fetch("PATH", "").split(File::PATH_SEPARATOR)
+    ENV["PATH"] = entries.reject do |entry|
+      !entry.empty? && target_paths.include?(File.expand_path(entry))
+    end.join(File::PATH_SEPARATOR)
+  end
+
   # Establish a clean cross-build environment for an idiomatic Formula
   # install block, then restore Homebrew's environment when the block exits.
   def kandelo_wasm_build
     saved = ENV.to_hash
+    kandelo_isolate_host_build_path!
     root = kandelo_activate_sdk!
     kandelo_activate_sysroot!(root)
 
