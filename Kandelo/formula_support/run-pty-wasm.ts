@@ -18,6 +18,7 @@ const S_IFMT = 0xf000;
 const S_IFDIR = 0x4000;
 
 interface PtyConfig {
+  argv0?: string | null;
   env: Record<string, string>;
   inputs: string[];
   rerunInputs?: string[] | null;
@@ -115,6 +116,10 @@ async function main(): Promise<void> {
   if (config.rerunInputs != null && !Array.isArray(config.rerunInputs)) {
     throw new Error("rerunInputs must be an array when present");
   }
+
+  const configuredArgv0 = config.argv0 ?? undefined;
+  if (configuredArgv0 !== undefined) validateGuestPath(configuredArgv0, []);
+  const argv0 = configuredArgv0 ?? programPath;
 
   const guestFiles = config.guestFiles ?? {};
   const guestDirectories = config.guestDirectories ?? [];
@@ -297,7 +302,7 @@ async function main(): Promise<void> {
         10,
       );
       const run = async (inputs: string[]): Promise<number> => {
-        const exit = host.spawn(program, [programPath, ...args], {
+        const exit = host.spawn(program, [argv0, ...args], {
           cwd: guestEnv.KERNEL_CWD ?? (rootfsImage ? "/" : process.cwd()),
           env,
           pty: true,

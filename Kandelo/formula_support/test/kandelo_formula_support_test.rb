@@ -702,17 +702,19 @@ class KandeloFormulaSupportTest < Minitest::Test
       harness.root_path = root.to_s
       output = harness.kandelo_run_pty_wasm(
         "program.wasm", ["note.txt"],
-        env:               { "KERNEL_CWD" => "/tmp/formula test" },
-        inputs:            ["\u001c", "beta", "\r"],
-        rerun_inputs:      ["\u0018"],
-        guest_files:       { "/etc/program.conf" => "/formula/program.conf" },
-        guest_directories: ["/home/linuxbrew/.linuxbrew/var/program/save"],
+        argv0:                      "/home/linuxbrew/.linuxbrew/opt/program/bin/program",
+        env:                        { "KERNEL_CWD" => "/tmp/formula test" },
+        inputs:                     ["\u001c", "beta", "\r"],
+        rerun_inputs:               ["\u0018"],
+        guest_files:                { "/etc/program.conf" => "/formula/program.conf" },
+        guest_directories:          ["/home/linuxbrew/.linuxbrew/var/program/save"],
         writable_guest_directories: ["/home/linuxbrew/.linuxbrew/var/program"]
       )
 
       assert_equal "runtime-ok\n", output
       assert_includes harness.command, "run-pty-wasm.ts"
       assert_includes harness.command, "KANDELO_FORMULA_PTY_CONFIG_JSON="
+      assert_includes harness.command, "/home/linuxbrew/.linuxbrew/opt/program/bin/program"
       assert_includes harness.command, "note.txt"
       assert_includes harness.command, "beta"
       assert_includes harness.command, "rerunInputs"
@@ -723,6 +725,14 @@ class KandeloFormulaSupportTest < Minitest::Test
       assert_equal "kandelo_run_pty_wasm", harness.recorded_launcher
       refute_path_exists host_dist
     end
+  end
+
+  def test_pty_execution_rejects_an_empty_guest_argv0
+    error = assert_raises(RuntimeError) do
+      Harness.new.kandelo_run_pty_wasm("program.wasm", [], inputs: [], argv0: "")
+    end
+
+    assert_includes error.message, "guest argv0 must be a nonempty normalized absolute path"
   end
 
   private

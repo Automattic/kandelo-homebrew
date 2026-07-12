@@ -350,12 +350,7 @@ module KandeloFormulaSupport
     writable_host_directories: {}, expected_fork_descendants: 0, expected_status: 0
   )
     root = kandelo_require_root!
-    if !argv0.nil? && (
-      argv0.empty? || !argv0.start_with?("/") || argv0.include?("\0") ||
-      Pathname(argv0).cleanpath.to_s != argv0
-    )
-      odie "guest argv0 must be a nonempty normalized absolute path: #{argv0.inspect}"
-    end
+    kandelo_validate_guest_argv0!(argv0)
     valid_descendant_count = expected_fork_descendants.is_a?(Integer) && expected_fork_descendants >= 0
     odie "expected fork descendant count must be a nonnegative integer" unless valid_descendant_count
     if (node = ENV.fetch("HOMEBREW_KANDELO_NODE", nil)).to_s != ""
@@ -472,11 +467,12 @@ module KandeloFormulaSupport
   # applications can render and transition between prompts. Writable guest
   # directories use isolated mounts that survive every spawn in this run.
   def kandelo_run_pty_wasm(
-    bin_path, argv, inputs:, env: {}, guest_files: {}, guest_directories: [],
+    bin_path, argv, inputs:, argv0: nil, env: {}, guest_files: {}, guest_directories: [],
     writable_guest_directories: [], rerun_inputs: nil, expected_status: 0,
     initial_delay_ms: 500, input_delay_ms: 180, cols: 100, rows: 30
   )
     root = kandelo_require_root!
+    kandelo_validate_guest_argv0!(argv0)
     if (node = ENV.fetch("HOMEBREW_KANDELO_NODE", nil)).to_s != ""
       ENV.prepend_path "PATH", File.dirname(node)
     end
@@ -489,16 +485,17 @@ module KandeloFormulaSupport
     end
 
     config = JSON.generate({
-      env:              env,
-      inputs:           inputs,
-      rerunInputs:      rerun_inputs,
-      guestFiles:       guest_files.transform_values(&:to_s),
-      guestDirectories: guest_directories.map(&:to_s),
+      argv0:                    argv0,
+      env:                      env,
+      inputs:                   inputs,
+      rerunInputs:              rerun_inputs,
+      guestFiles:               guest_files.transform_values(&:to_s),
+      guestDirectories:         guest_directories.map(&:to_s),
       writableGuestDirectories: writable_guest_directories.map(&:to_s),
-      initialDelayMs:   initial_delay_ms,
-      inputDelayMs:     input_delay_ms,
-      cols:             cols,
-      rows:             rows,
+      initialDelayMs:           initial_delay_ms,
+      inputDelayMs:             input_delay_ms,
+      cols:                     cols,
+      rows:                     rows,
     })
 
     # Compiled host output shadows TypeScript source under tsx. PTY formula
@@ -517,6 +514,14 @@ module KandeloFormulaSupport
     output = shell_output(command, expected_status)
     kandelo_record_node_execution!(wasm_path, argv, launcher: "kandelo_run_pty_wasm")
     output
+  end
+
+  def kandelo_validate_guest_argv0!(argv0)
+    return if argv0.nil?
+
+    invalid = argv0.empty? || !argv0.start_with?("/") || argv0.include?("\0") ||
+              Pathname(argv0).cleanpath.to_s != argv0
+    odie "guest argv0 must be a nonempty normalized absolute path: #{argv0.inspect}" if invalid
   end
 
   # Run a long-lived DRM/KMS program until it has completed real PAGE_FLIP
