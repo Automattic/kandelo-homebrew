@@ -106,8 +106,11 @@ def check_default_branch(job, label, expected_name, expected_hash)
   steps = job_steps(job, label)
   check(steps.length == 1, "#{label} must contain exactly one validation step")
   validation = steps.first
-  check(validation["name"] == expected_name && validation["id"] == "request",
-        "#{label} validation step identity changed")
+  check(validation.keys.sort == %w[env id name run shell] &&
+        validation["name"] == expected_name &&
+        validation["id"] == "request" &&
+        validation["shell"] == "bash",
+        "#{label} validation step mapping changed")
   check(validation["run"].to_s.include?('[ "$GITHUB_REF" = "refs/heads/main" ]'),
         "#{label} does not enforce the default-branch event invariant")
   check(Digest::SHA256.hexdigest(validation["run"].to_s) == expected_hash,
@@ -126,6 +129,8 @@ def check_dry_run(workflow)
   jobs = workflow_jobs(workflow)
   check(jobs.keys.sort == %w[dry-run validate-request], "dry-run workflow has an unexpected job set")
   validation = jobs.fetch("validate-request")
+  check(validation.keys.sort == %w[outputs runs-on steps],
+        "dry-run validation job execution contract changed")
   check(!validation.key?("permissions"), "dry-run validation overrides read-only permissions")
   expected_outputs = {
     "arches" => "${{ steps.request.outputs.arches }}",
@@ -149,6 +154,8 @@ def check_dry_run(workflow)
     "dd0dcc5d4565ab1d83342c43bb439ccd350397321254cf3a15b45a72cde270ba"
   )
   caller = jobs.fetch("dry-run")
+  check(caller.keys.sort == %w[needs permissions uses with],
+        "dry-run caller execution contract changed")
   check(caller["needs"] == ["validate-request"],
         "dry-run caller bypasses request validation")
   check(exact_permissions?(caller["permissions"], READ_PERMISSIONS),
@@ -179,6 +186,8 @@ def check_publish(workflow)
   jobs = workflow_jobs(workflow)
   check(jobs.keys.sort == %w[publish validate-request], "publish workflow has an unexpected job set")
   validation = jobs.fetch("validate-request")
+  check(validation.keys.sort == %w[outputs permissions runs-on steps],
+        "publication validation job execution contract changed")
   check(exact_permissions?(validation["permissions"], READ_PERMISSIONS),
         "publication validation permissions are not read-only")
   expected_outputs = {
@@ -202,6 +211,8 @@ def check_publish(workflow)
   )
 
   caller = jobs.fetch("publish")
+  check(caller.keys.sort == %w[needs permissions uses with],
+        "publisher call execution contract changed")
   check(caller["needs"] == ["validate-request"],
         "publisher bypasses request validation")
   check(exact_permissions?(caller["permissions"], WRITE_PERMISSIONS),
@@ -259,7 +270,8 @@ def check_contract_workflow(workflow)
       "run" => "bash Kandelo/test-workflow-trust.sh",
     },
   ]
-  check(steps == expected_steps, "contract-check execution sequence changed")
+  expected_job = { "runs-on" => "ubuntu-latest", "steps" => expected_steps }
+  check(job == expected_job, "contract-check job execution contract changed")
   uses = values_for_key(workflow, "uses")
   expected_uses = [
     "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
@@ -307,6 +319,11 @@ def self_test(dry_run, publish, contract)
     mutated = deep_copy(dry_run)
     step = mutated.dig("jobs", "validate-request", "steps").first
     step["run"] = "exit 0\n#{step['run']}"
+    check_dry_run(mutated)
+  end
+  expect_rejection("continued dry-run validation failure") do
+    mutated = deep_copy(dry_run)
+    mutated.dig("jobs", "validate-request", "steps").first["continue-on-error"] = true
     check_dry_run(mutated)
   end
   expect_rejection("an extra dry-run backdoor job") do
@@ -368,6 +385,16 @@ def self_test(dry_run, publish, contract)
   expect_rejection("a disabled hosted contract command") do
     mutated = deep_copy(contract)
     mutated.dig("jobs", "publisher-trust", "steps", 2)["run"] = "true"
+    check_contract_workflow(mutated)
+  end
+  expect_rejection("a skipped hosted contract job") do
+    mutated = deep_copy(contract)
+    mutated.dig("jobs", "publisher-trust")["if"] = false
+    check_contract_workflow(mutated)
+  end
+  expect_rejection("a self-hosted contract job") do
+    mutated = deep_copy(contract)
+    mutated.dig("jobs", "publisher-trust")["runs-on"] = "self-hosted"
     check_contract_workflow(mutated)
   end
   expect_rejection("contract checks that ignore workflow changes") do
