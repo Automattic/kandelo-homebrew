@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require "digest"
 require "yaml"
 
 ROOT = File.expand_path("..", __dir__)
@@ -101,11 +102,16 @@ def check_dispatch(workflow, event_type, label)
   check(types == [event_type], "#{label} has an unexpected repository_dispatch type")
 end
 
-def check_default_branch(steps, label)
-  validation = steps.find { |step| step["name"].to_s.start_with?("Validate default-branch") }
-  check(!validation.nil?, "#{label} lacks default-branch validation")
+def check_default_branch(job, label, expected_name, expected_hash)
+  steps = job_steps(job, label)
+  check(steps.length == 1, "#{label} must contain exactly one validation step")
+  validation = steps.first
+  check(validation["name"] == expected_name && validation["id"] == "request",
+        "#{label} validation step identity changed")
   check(validation["run"].to_s.include?('[ "$GITHUB_REF" = "refs/heads/main" ]'),
         "#{label} does not enforce the default-branch event invariant")
+  check(Digest::SHA256.hexdigest(validation["run"].to_s) == expected_hash,
+        "#{label} validation script changed")
 end
 
 READ_PERMISSIONS = { "contents" => "read", "packages" => "read", "actions" => "read" }.freeze
@@ -121,18 +127,45 @@ def check_dry_run(workflow)
   check(jobs.keys.sort == %w[dry-run validate-request], "dry-run workflow has an unexpected job set")
   validation = jobs.fetch("validate-request")
   check(!validation.key?("permissions"), "dry-run validation overrides read-only permissions")
-  check_default_branch(job_steps(validation, "dry-run validation"), "dry-run workflow")
+  expected_outputs = {
+    "arches" => "${{ steps.request.outputs.arches }}",
+    "formulae" => "${{ steps.request.outputs.formulae }}",
+    "kandelo-ref" => "${{ steps.request.outputs.kandelo-ref }}",
+    "tap-ref" => "${{ steps.request.outputs.tap-ref }}",
+  }
+  check(validation["outputs"] == expected_outputs, "dry-run validation outputs changed")
+  expected_env = {
+    "REQUEST_ARCHES" => "${{ github.event.client_payload.arches || 'wasm32' }}",
+    "REQUEST_FORMULAE" => "${{ github.event.client_payload.formulae }}",
+    "REQUEST_KANDELO_REF" => "${{ github.event.client_payload.kandelo_ref || 'main' }}",
+    "REQUEST_TAP_REF" => "${{ github.event.client_payload.tap_ref }}",
+  }
+  check(job_steps(validation, "dry-run validation").first["env"] == expected_env,
+        "dry-run validation input wiring changed")
+  check_default_branch(
+    validation,
+    "dry-run validation",
+    "Validate default-branch dry-run request",
+    "dd0dcc5d4565ab1d83342c43bb439ccd350397321254cf3a15b45a72cde270ba"
+  )
   caller = jobs.fetch("dry-run")
+  check(caller["needs"] == ["validate-request"],
+        "dry-run caller bypasses request validation")
   check(exact_permissions?(caller["permissions"], READ_PERMISSIONS),
         "dry-run caller permissions are not exact")
   check(caller["uses"] ==
         "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@main",
         "dry-run caller does not use the reviewed publisher")
-  inputs = caller.fetch("with")
-  check(inputs["kandelo-repository"] == "Automattic/kandelo" &&
-        inputs["tap-repository"] == "Automattic/kandelo-homebrew",
-        "dry-run caller does not use first-party repositories")
-  check(inputs["dry-run"] == true, "dry-run caller does not pass literal dry-run mode")
+  expected_inputs = {
+    "kandelo-repository" => "Automattic/kandelo",
+    "kandelo-ref" => "${{ needs.validate-request.outputs.kandelo-ref }}",
+    "tap-repository" => "Automattic/kandelo-homebrew",
+    "tap-ref" => "${{ needs.validate-request.outputs.tap-ref }}",
+    "formulae" => "${{ needs.validate-request.outputs.formulae }}",
+    "arches" => "${{ needs.validate-request.outputs.arches }}",
+    "dry-run" => true,
+  }
+  check(caller["with"] == expected_inputs, "dry-run caller bypasses validated inputs")
   expected_uses = ["Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@main"]
   check(values_for_key(workflow, "uses") == expected_uses, "dry-run action set changed")
 end
@@ -148,20 +181,45 @@ def check_publish(workflow)
   validation = jobs.fetch("validate-request")
   check(exact_permissions?(validation["permissions"], READ_PERMISSIONS),
         "publication validation permissions are not read-only")
-  check_default_branch(job_steps(validation, "publication validation"), "publish workflow")
+  expected_outputs = {
+    "arches" => "${{ steps.request.outputs.arches }}",
+    "formulae" => "${{ steps.request.outputs.formulae }}",
+    "release-tag" => "${{ steps.request.outputs.release-tag }}",
+  }
+  check(validation["outputs"] == expected_outputs, "publication validation outputs changed")
+  expected_env = {
+    "REQUEST_ARCHES" => "${{ github.event.client_payload.arches || 'wasm32' }}",
+    "REQUEST_FORMULAE" => "${{ github.event.client_payload.formulae }}",
+    "REQUEST_RELEASE_TAG" => "${{ github.event.client_payload.release_tag || '' }}",
+  }
+  check(job_steps(validation, "publication validation").first["env"] == expected_env,
+        "publication validation input wiring changed")
+  check_default_branch(
+    validation,
+    "publication validation",
+    "Validate default-branch publication request",
+    "f62d1a67ad9100fe33d406e9923139f50c5c2e252c81cc71e63dbd1fde74b7a2"
+  )
 
   caller = jobs.fetch("publish")
+  check(caller["needs"] == ["validate-request"],
+        "publisher bypasses request validation")
   check(exact_permissions?(caller["permissions"], WRITE_PERMISSIONS),
         "publisher call permissions are not exact")
   check(caller["uses"] ==
         "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@main",
         "publisher does not use the reviewed reusable workflow")
-  inputs = caller.fetch("with")
-  check(inputs["kandelo-repository"] == "Automattic/kandelo" &&
-        inputs["kandelo-ref"] == "main" &&
-        inputs["tap-repository"] == "Automattic/kandelo-homebrew" &&
-        inputs["tap-ref"] == "main", "publisher does not use first-party main refs")
-  check(inputs["dry-run"] == false, "publisher does not pass literal publication mode")
+  expected_inputs = {
+    "kandelo-repository" => "Automattic/kandelo",
+    "kandelo-ref" => "main",
+    "tap-repository" => "Automattic/kandelo-homebrew",
+    "tap-ref" => "main",
+    "formulae" => "${{ needs.validate-request.outputs.formulae }}",
+    "arches" => "${{ needs.validate-request.outputs.arches }}",
+    "release-tag" => "${{ needs.validate-request.outputs.release-tag }}",
+    "dry-run" => false,
+  }
+  check(caller["with"] == expected_inputs, "publisher bypasses validated inputs or main refs")
 
   serialized = workflow.to_s
   check(!serialized.include?("client_payload.kandelo_ref") &&
@@ -172,7 +230,16 @@ end
 
 def check_contract_workflow(workflow)
   events = workflow_events(workflow)
-  check(events.keys.sort == %w[pull_request push], "contract-check workflow has unexpected events")
+  watched_paths = [
+    ".github/workflows/**",
+    "Kandelo/test-workflow-trust.sh",
+    "Kandelo/test-workflow-trust.rb",
+  ]
+  expected_events = {
+    "pull_request" => { "paths" => watched_paths },
+    "push" => { "branches" => ["main"], "paths" => watched_paths },
+  }
+  check(events == expected_events, "contract-check workflow triggers changed")
   expected = { "contents" => "read" }
   check(exact_permissions?(workflow["permissions"], expected),
         "contract-check workflow permissions are not exact")
@@ -180,13 +247,26 @@ def check_contract_workflow(workflow)
   check(jobs.keys == ["publisher-trust"], "contract-check workflow has an unexpected job set")
   job = jobs.fetch("publisher-trust")
   check(!job.key?("permissions"), "contract-check job overrides read-only permissions")
+  steps = job_steps(job, "contract-check")
+  expected_steps = [
+    { "uses" => "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0" },
+    {
+      "uses" => "ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9",
+      "with" => { "ruby-version" => "3.4" },
+    },
+    {
+      "name" => "Validate publisher trust boundaries",
+      "run" => "bash Kandelo/test-workflow-trust.sh",
+    },
+  ]
+  check(steps == expected_steps, "contract-check execution sequence changed")
   uses = values_for_key(workflow, "uses")
   expected_uses = [
     "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
     "ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9",
   ]
   check(uses == expected_uses, "contract-check action set or pins changed")
-  ruby_step = job_steps(job, "contract-check").find do |step|
+  ruby_step = steps.find do |step|
     step["uses"] == "ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9"
   end
   check(ruby_step&.dig("with", "ruby-version") == "3.4",
@@ -223,6 +303,12 @@ def self_test(dry_run, publish, contract)
     mutated.dig("jobs", "validate-request")["permissions"] = { "contents" => "write" }
     check_dry_run(mutated)
   end
+  expect_rejection("short-circuited dry-run validation") do
+    mutated = deep_copy(dry_run)
+    step = mutated.dig("jobs", "validate-request", "steps").first
+    step["run"] = "exit 0\n#{step['run']}"
+    check_dry_run(mutated)
+  end
   expect_rejection("an extra dry-run backdoor job") do
     mutated = deep_copy(dry_run)
     mutated.fetch("jobs")["backdoor"] = {
@@ -253,6 +339,13 @@ def self_test(dry_run, publish, contract)
     }
     check_publish(mutated)
   end
+  expect_rejection("publication detached from validation") do
+    mutated = deep_copy(publish)
+    caller = mutated.dig("jobs", "publish")
+    caller.delete("needs")
+    caller.fetch("with")["formulae"] = "${{ github.event.client_payload.formulae }}"
+    check_publish(mutated)
+  end
   expect_rejection("a write-capable contract-check job") do
     mutated = deep_copy(contract)
     mutated.dig("jobs", "publisher-trust")["permissions"] = { "contents" => "write" }
@@ -270,6 +363,16 @@ def self_test(dry_run, publish, contract)
   expect_rejection("an unpinned Ruby setup action") do
     mutated = deep_copy(contract)
     mutated.dig("jobs", "publisher-trust", "steps") << { "uses" => "ruby/setup-ruby@v1" }
+    check_contract_workflow(mutated)
+  end
+  expect_rejection("a disabled hosted contract command") do
+    mutated = deep_copy(contract)
+    mutated.dig("jobs", "publisher-trust", "steps", 2)["run"] = "true"
+    check_contract_workflow(mutated)
+  end
+  expect_rejection("contract checks that ignore workflow changes") do
+    mutated = deep_copy(contract)
+    workflow_events(mutated).fetch("pull_request")["paths"] = ["README.md"]
     check_contract_workflow(mutated)
   end
 end
