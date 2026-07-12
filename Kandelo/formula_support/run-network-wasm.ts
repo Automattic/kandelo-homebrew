@@ -23,6 +23,38 @@ interface WritableRootfs {
   close(fd: number): void;
 }
 
+interface ProcessEvent {
+  kind: "spawn" | "exec" | "exit";
+  pid: number;
+  ppid?: number;
+  exitStatus?: number;
+}
+
+async function waitForForkDescendants(
+  expectedCount: number,
+  activePids: Set<number>,
+  descendantPids: Set<number>,
+  descendantExitStatuses: Map<number, number>,
+  deadline: number,
+): Promise<void> {
+  while (descendantPids.size < expectedCount || activePids.size > 0) {
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `timed out waiting for ${expectedCount} fork descendant(s); ` +
+          `observed ${descendantPids.size}, active ${[...activePids].join(",") || "none"}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  const failures = [...descendantExitStatuses]
+    .filter(([, status]) => status !== 0)
+    .map(([pid, status]) => `${pid}:${status}`);
+  if (failures.length > 0) {
+    throw new Error(`descendant process failed: ${failures.join(", ")}`);
+  }
+}
+
 function writeGuestFile(
   rootfs: WritableRootfs,
   guestPath: string,
@@ -77,6 +109,18 @@ async function main(): Promise<void> {
   const writableHostDirectories = JSON.parse(
     process.env.KANDELO_FORMULA_WRITABLE_HOST_DIRS_JSON ?? "{}",
   ) as Record<string, string>;
+  const expectedForkDescendantsValue =
+    process.env.KANDELO_FORMULA_EXPECTED_FORK_DESCENDANTS ?? "0";
+  const expectedForkDescendants = Number(expectedForkDescendantsValue);
+  if (
+    !/^(0|[1-9]\d*)$/.test(expectedForkDescendantsValue) ||
+    !Number.isSafeInteger(expectedForkDescendants) ||
+    expectedForkDescendants < 0
+  ) {
+    throw new Error(
+      `invalid expected fork descendant count: ${expectedForkDescendantsValue}`,
+    );
+  }
   const configuredArgv0 = process.env.KANDELO_FORMULA_ARGV0;
   const argv0 = configuredArgv0 ?? programPath;
   const guestPaths = [...Object.keys(guestFiles), ...Object.keys(execPrograms)];
@@ -175,6 +219,9 @@ async function main(): Promise<void> {
     writeGuestFile(rootfs, entry.guestPath, entry.bytes, entry.mode);
   }
   const rootfsImage = await rootfs.saveImage();
+  const activePids = new Set<number>();
+  const descendantPids = new Set<number>();
+  const descendantExitStatuses = new Map<number, number>();
   const host = new NodeKernelHost({
     maxWorkers: 8,
     execPrograms,
@@ -185,6 +232,19 @@ async function main(): Promise<void> {
     rootfsImage,
     onStdout: (_pid: number, data: Uint8Array) => process.stdout.write(data),
     onStderr: (_pid: number, data: Uint8Array) => process.stderr.write(data),
+    onProcessEvent: (event: ProcessEvent) => {
+      // Fork events carry a parent PID and are posted before fork() returns.
+      // Ignore the synthetic root spawn so a fast root exit cannot be re-added.
+      if (event.kind === "spawn" && event.ppid !== undefined) {
+        activePids.add(event.pid);
+        descendantPids.add(event.pid);
+      } else if (event.kind === "exit") {
+        if (descendantPids.has(event.pid)) {
+          activePids.delete(event.pid);
+          descendantExitStatuses.set(event.pid, event.exitStatus ?? -1);
+        }
+      }
+    },
   });
 
   try {
@@ -208,6 +268,7 @@ async function main(): Promise<void> {
       guestEnv.TIMEOUT ?? process.env.TIMEOUT ?? "30000",
       10,
     );
+    const deadline = Date.now() + timeoutMs;
     const exit = host.spawn(program, [argv0, ...args], {
       cwd: guestEnv.KERNEL_CWD ?? "/tmp",
       env,
@@ -221,7 +282,20 @@ async function main(): Promise<void> {
       );
     });
     try {
-      process.exitCode = await Promise.race([exit, timeout]);
+      const status = await Promise.race([exit, timeout]);
+      process.exitCode = status;
+      if (status === 0 && expectedForkDescendants > 0) {
+        await Promise.race([
+          waitForForkDescendants(
+            expectedForkDescendants,
+            activePids,
+            descendantPids,
+            descendantExitStatuses,
+            deadline,
+          ),
+          timeout,
+        ]);
+      }
     } finally {
       if (timer) clearTimeout(timer);
     }

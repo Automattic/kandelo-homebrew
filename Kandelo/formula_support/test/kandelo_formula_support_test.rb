@@ -269,7 +269,8 @@ class KandeloFormulaSupportTest < Minitest::Test
   def test_network_execution_uses_tap_owned_runner
     harness = Harness.new
     output = harness.kandelo_run_wasm(
-      "program.wasm", ["a b"], env: { "TOKEN" => "x y" }, network: true
+      "program.wasm", ["a b"], env: { "TOKEN" => "x y" }, network: true,
+      expected_fork_descendants: 1
     )
 
     assert_equal "runtime-ok\n", output
@@ -277,10 +278,21 @@ class KandeloFormulaSupportTest < Minitest::Test
     assert_includes harness.command, "/tmp/kandelo\\ root"
     assert_includes harness.command, "KANDELO_FORMULA_GUEST_ENV_JSON="
     assert_includes harness.command, "KANDELO_FORMULA_ENABLE_NETWORK=1"
+    assert_includes harness.command, "KANDELO_FORMULA_EXPECTED_FORK_DESCENDANTS=1"
     assert_includes harness.command, "TOKEN"
     refute_includes harness.command, "TOKEN=x\\ y"
     assert_includes harness.command, "program.wasm a\\ b"
     refute_includes harness.command, "examples/run-example.ts"
+  end
+
+  def test_execution_rejects_invalid_expected_fork_descendant_count
+    error = assert_raises(RuntimeError) do
+      Harness.new.kandelo_run_wasm(
+        "program.wasm", [], expected_fork_descendants: -1
+      )
+    end
+
+    assert_includes error.message, "expected fork descendant count must be a nonnegative integer"
   end
 
   def test_default_execution_keeps_standard_runner_and_removes_stale_host_dist
