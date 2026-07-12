@@ -54,9 +54,6 @@ class Wget < Formula
       ENV["ZLIB_CFLAGS"] = "-I#{zlib}/include"
       ENV["ZLIB_LIBS"] = "-L#{zlib}/lib -lz"
 
-      # The SDK site owns target facts; this gnulib runtime probe is package-specific.
-      ENV["gl_cv_func_strerror_0_works"] = "yes"
-
       system kandelo_configure,
         "--prefix=#{GUEST_OPT_PREFIX}",
         "--sysconfdir=#{GUEST_HOMEBREW_PREFIX}/etc",
