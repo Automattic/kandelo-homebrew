@@ -21,9 +21,19 @@ class Dash < Formula
       # mksignames runs on the build host, but its output is target data.
       ENV["CPPFLAGS_FOR_BUILD"] = "-DKANDELO_TARGET_SIGNALS"
 
+      # Autoconf's unprototyped isalpha probe is incompatible with Wasm's
+      # typed function signatures. Its link probes also accept unresolved
+      # *64 compatibility names as Wasm imports, although musl only exposes
+      # them as _LARGEFILE64_SOURCE aliases. wasm32 already has 64-bit off_t,
+      # so use musl's public ctype and native file interfaces.
       system kandelo_configure, *kandelo_std_configure_args,
         "--enable-static",
-        "--with-libedit=no"
+        "--with-libedit=no",
+        "ac_cv_func_isalpha=yes",
+        "ac_cv_func_open64=no",
+        "ac_cv_func_stat64=no",
+        "ac_cv_have_decl_stat64=no",
+        "ac_cv_func_glob64=no"
       system "make"
 
       dash = buildpath/"src/dash"
