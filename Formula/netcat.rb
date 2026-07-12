@@ -1,4 +1,4 @@
-require_relative "../Kandelo/formula_support/kandelo_formula_support"
+require (Tap.fetch("automattic", "kandelo-homebrew").path/"Kandelo/formula_support/kandelo_formula_support").to_s
 
 class Netcat < Formula
   include KandeloFormulaSupport
@@ -20,17 +20,19 @@ class Netcat < Formula
     kandelo_require_arch!("wasm32")
 
     kandelo_wasm_build do |root|
-      ENV["CFLAGS"] = "-O2 -gline-tables-only -fdebug-compilation-dir=."
-      ENV["ac_cv_func_malloc_0_nonnull"] = "yes"
-      ENV["ac_cv_func_realloc_0_nonnull"] = "yes"
-      ENV["ac_cv_func_gethostbyname"] = "yes"
-      ENV["ac_cv_func_getservbyname"] = "yes"
-      ENV["ac_cv_func_getaddrinfo"] = "yes"
-      ENV["ac_cv_func_inet_pton"] = "yes"
-      ENV["ac_cv_func_select"] = "yes"
+      prefix_maps = [
+        "-ffile-prefix-map=#{buildpath}=/usr/src/netcat",
+        "-fdebug-prefix-map=#{buildpath}=/usr/src/netcat",
+        "-fmacro-prefix-map=#{buildpath}=/usr/src/netcat",
+        "-ffile-prefix-map=#{root}=/usr/src/kandelo",
+        "-fdebug-prefix-map=#{root}=/usr/src/kandelo",
+        "-fmacro-prefix-map=#{root}=/usr/src/kandelo",
+      ]
+      ENV["CFLAGS"] = ["-O2", "-gline-tables-only", "-fdebug-compilation-dir=.", *prefix_maps].join(" ")
+      # The SDK site owns target function facts. GNU Netcat's optional
+      # resolver-library probes are package-specific and libresolv is absent.
       ENV["ac_cv_header_resolv_h"] = "no"
       ENV["ac_cv_lib_resolv_main"] = "no"
-      ENV["gl_cv_func_gettimeofday_clobber"] = "no"
 
       configure_args = kandelo_std_configure_args
       # Upstream's 2004 config.sub predates arm64 Darwin. This identifies the
@@ -40,28 +42,10 @@ class Netcat < Formula
         "--disable-nls",
         "--without-included-gettext"
       system "make", "-j#{ENV.make_jobs}"
-
-      instrumented = buildpath/"src/netcat.instrumented"
-      system "#{root}/scripts/run-wasm-fork-instrument.sh", buildpath/"src/netcat", "-o", instrumented
-      artifact_guards = "#{root}/scripts/wasm-artifact-guards.sh"
-      system "bash", "-c", <<~SH
-        set -euo pipefail
-        . #{artifact_guards.shellescape}
-        expected_abi=$(wasm_current_abi_version #{root.to_s.shellescape})
-        artifact_abi=$(wasm_extract_abi_version #{instrumented.to_s.shellescape})
-        if [ -z "$expected_abi" ] || [ "$artifact_abi" != "$expected_abi" ]; then
-          echo "ERROR: Netcat ABI $artifact_abi does not match Kandelo ABI $expected_abi" >&2
-          exit 1
-        fi
-        wasm_require_no_legacy_asyncify #{instrumented.to_s.shellescape}
-        if ! wasm_has_complete_fork_instrumentation #{instrumented.to_s.shellescape}; then
-          echo "ERROR: Netcat has incomplete fork instrumentation" >&2
-          exit 1
-        fi
-      SH
+      kandelo_validate_wasm_artifact(buildpath/"src/netcat", fork: :forbidden)
     end
 
-    kandelo_install_bin(buildpath/"src", "netcat.instrumented", "netcat")
+    kandelo_install_bin(buildpath/"src", "netcat", "netcat")
     bin.install_symlink "netcat" => "nc"
     man1.install "doc/netcat.1"
   end

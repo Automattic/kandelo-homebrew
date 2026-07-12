@@ -801,21 +801,30 @@ class KandeloFormulaSupportTest < Minitest::Test
     assert_includes error.message, "guest argv0 must be a nonempty normalized absolute path"
   end
 
-  def test_virtual_network_pairs_use_tap_owned_runner
-    harness = Harness.new
-    output = harness.kandelo_run_virtual_network_pairs(
-      "program.wasm",
-      [{ name: "tcp", transport: "tcp", serverArgs: ["nc", "-l"], clientArgs: ["nc", "host"] }],
-    )
+  def test_virtual_network_pairs_use_tap_owned_runner_and_remove_stale_host_dist
+    Dir.mktmpdir("kandelo-formula-support") do |dir|
+      root = Pathname(dir)/"kandelo root"
+      host_dist = root/"host/dist"
+      host_dist.mkpath
+      (host_dist/"stale.js").binwrite("stale")
 
-    assert_equal "runtime-ok\n", output
-    assert_includes harness.command, "run-virtual-network-pairs.ts"
-    assert_includes harness.command, "KANDELO_FORMULA_VIRTUAL_PAIRS_JSON="
-    assert_includes harness.command, "serverArgs"
-    assert_includes harness.command, "clientArgs"
-    assert_includes harness.command, "transport"
-    assert_includes harness.command, "program.wasm"
-    assert_equal "kandelo_run_virtual_network_pairs", harness.recorded_launcher
+      harness = Harness.new
+      harness.root_path = root.to_s
+      output = harness.kandelo_run_virtual_network_pairs(
+        "program.wasm",
+        [{ name: "tcp", transport: "tcp", serverArgs: ["nc", "-l"], clientArgs: ["nc", "host"] }],
+      )
+
+      assert_equal "runtime-ok\n", output
+      assert_includes harness.command, "run-virtual-network-pairs.ts"
+      assert_includes harness.command, "KANDELO_FORMULA_VIRTUAL_PAIRS_JSON="
+      assert_includes harness.command, "serverArgs"
+      assert_includes harness.command, "clientArgs"
+      assert_includes harness.command, "transport"
+      assert_includes harness.command, "program.wasm"
+      assert_equal "kandelo_run_virtual_network_pairs", harness.recorded_launcher
+      refute_path_exists host_dist
+    end
   end
 
   private

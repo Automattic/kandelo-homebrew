@@ -729,6 +729,10 @@ module KandeloFormulaSupport
     end
 
     config = JSON.generate({ cases: cases })
+    # Compiled host output shadows TypeScript source under tsx. Network-pair
+    # tests must exercise the checkout supplied by HOMEBREW_KANDELO_ROOT.
+    FileUtils.rm_rf(Pathname(root)/"host/dist")
+
     runner = Pathname(__dir__)/"run-virtual-network-pairs.ts"
     command = "cd #{Shellwords.escape(root)} && "
     command << "KANDELO_FORMULA_VIRTUAL_PAIRS_JSON=#{Shellwords.escape(config)} "
