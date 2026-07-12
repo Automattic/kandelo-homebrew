@@ -25,8 +25,9 @@ class Bash < Formula
     "pop_context"               => "pop_context_w",
     "bashline_reset_event_hook" => "bashline_reset_event_hook_w",
     "merge_temporary_env"       => "merge_temporary_env_w",
-    "bashline_reinitialize"     => "bashline_reinitialize_w",
+    "reset_timeout"             => "reset_timeout_w",
     "reset_locals"              => "reset_locals_w",
+    "set_verbose_flag"          => "set_verbose_flag_w",
     "set_history_remembering"   => "set_history_remembering_w",
     "close"                     => "close_w",
     "unlink"                    => "unlink_w",
@@ -51,51 +52,19 @@ class Bash < Formula
         "-Wno-incompatible-pointer-types",
       ].join(" ")
 
-      # These are Bash-specific runtime probes that cannot execute while
-      # cross-compiling. /dev/fd and /dev/stdin are optional, non-POSIX
-      # pathname interfaces; real FIFO-backed process substitution remains
-      # enabled and tested below. Shared target facts remain owned by the SDK.
+      # These Bash-specific runtime/path probes cannot be inferred by a cross
+      # compile. Shared function and type facts remain owned by the SDK or by
+      # configure's target link/compile probes.
       {
-        "bash_cv_dev_fd"                      => "absent",
-        "bash_cv_dev_stdin"                   => "absent",
-        "bash_cv_dup2_broken"                 => "no",
-        "bash_cv_fnmatch_equiv_fallback"      => "yes",
-        "bash_cv_fpurge_missing"              => "yes",
-        "bash_cv_func_sigsetjmp"              => "present",
-        "bash_cv_func_strcasestr"             => "yes",
-        "bash_cv_func_strcoll_broken"         => "no",
-        "bash_cv_getcwd_malloc"               => "yes",
-        "bash_cv_getenv_redef"                => "yes",
-        "bash_cv_job_control_missing"         => "present",
-        "bash_cv_mail_dir"                    => "/var/mail",
-        "bash_cv_mkfifo_supported"            => "yes",
-        "bash_cv_must_reinstall_sighandlers"  => "no",
-        "bash_cv_pgrp_pipe"                   => "no",
-        "bash_cv_printf_a_format"             => "yes",
-        "bash_cv_struct_stat_st_atim_tv_nsec" => "yes",
-        "bash_cv_struct_timespec_in_time_h"   => "yes",
-        "bash_cv_sys_errlist"                 => "yes",
-        "bash_cv_sys_named_pipes"             => "present",
-        "bash_cv_sys_siglist"                 => "no",
-        "bash_cv_termcap_lib"                 => "libtinfo",
-        "bash_cv_type_rlimit"                 => "quad_t",
-        "bash_cv_under_sys_siglist"           => "no",
-        "bash_cv_unusable_rtsigs"             => "no",
-        "bash_cv_wcontinued_broken"           => "no",
-        "ac_cv_func___fpurge"                 => "yes",
-        "ac_cv_func_fgets_unlocked"           => "no",
-        "ac_cv_func_fpurge"                   => "no",
-        "ac_cv_func_fputs_unlocked"           => "no",
-        "ac_cv_func_getc_unlocked"            => "no",
-        "ac_cv_func_getchar_unlocked"         => "no",
-        "ac_cv_func_getwd"                    => "no",
-        "ac_cv_func_mbschr"                   => "no",
-        "ac_cv_func_mbsnrtowcs"               => "no",
-        "ac_cv_func_putc_unlocked"            => "no",
-        "ac_cv_func_putchar_unlocked"         => "no",
-        "ac_cv_func_sigrelse"                 => "no",
-        "ac_cv_func_ulimit"                   => "no",
-        "ac_cv_func_wcsnrtombs"               => "no",
+        "bash_cv_dev_fd"          => "standard",
+        "bash_cv_dev_stdin"       => "present",
+        "bash_cv_getcwd_malloc"   => "yes",
+        "bash_cv_mail_dir"        => "/var/mail",
+        "bash_cv_printf_a_format" => "yes",
+        "bash_cv_sys_errlist"     => "no",
+        "bash_cv_sys_named_pipes" => "present",
+        "bash_cv_termcap_lib"     => "libtinfo",
+        "bash_cv_unusable_rtsigs" => "no",
       }.each { |key, value| ENV[key] = value }
 
       # Compile runtime paths against the stable guest opt link; make install
@@ -110,6 +79,24 @@ class Bash < Formula
         "--disable-mem-scramble",
         "--disable-net-redirections",
         "--disable-progcomp"
+
+      config_h = (buildpath/"config.h").read
+      {
+        '#define DEV_FD_PREFIX "/dev/fd/"' => "target descriptor alias prefix",
+        "#define FNMATCH_EQUIV_FALLBACK 0" => "target fnmatch equivalence behavior",
+        "#define HAVE_DEV_FD 1"            => "target descriptor aliases",
+        "#define HAVE_DEV_STDIN 1"         => "target standard-stream aliases",
+        "#define HAVE_MBSNRTOWCS 1"        => "target mbsnrtowcs availability",
+        "#define HAVE_ULIMIT 1"            => "target ulimit availability",
+        "#define RLIMTYPE rlim_t"          => "target rlim_t type",
+      }.each do |definition, description|
+        odie "Bash configure misreported #{description}" unless config_h.include?(definition)
+      end
+      %w[HAVE_MBSCHR HAVE_SETDTABLESIZE HAVE_SETOSTYPE HAVE_SYS_ERRLIST].each do |name|
+        odie "Bash configure found absent #{name}" if config_h.include?("#define #{name} 1")
+      end
+      makefile = (buildpath/"Makefile").read
+      odie "Bash configure did not select ncurses libtinfo" unless makefile.match?(/^TERMCAP_LIB = -ltinfo$/)
 
       # Bash 5.2's recursive make graph races its library Makefiles against the
       # final link. The maintained registry recipe therefore builds serially.
@@ -151,6 +138,7 @@ class Bash < Formula
   test do
     env = {
       "HOME"       => testpath,
+      "HISTFILE"   => "/dev/null",
       "KERNEL_CWD" => testpath,
       "TERM"       => "dumb",
     }
@@ -166,6 +154,41 @@ class Bash < Formula
     assert_equal "#!#{GUEST_OPT_PREFIX}/bin/bash\n", bashbug.lines.first
     assert_includes bashbug, 'VERSTR="GNU bashbug, version ${RELEASE}.${PATCHLEVEL}-${RELSTATUS}"'
     assert_empty kandelo_run_wasm(bin/"bash", ["-n", bin/"bashbug"], env: env)
+
+    source_fixture = testpath/"source-args.sh"
+    source_fixture.write <<~'BASH'
+      printf 'source=%s\n' "$1"
+    BASH
+    source_script = <<~'BASH'
+      set -- outer
+      source ./source-args.sh "two words"
+      printf 'after-source=%s\n' "$1"
+    BASH
+    assert_equal "source=two words\nafter-source=outer\n",
+      kandelo_run_wasm(bin/"bash", ["-c", source_script], env: env)
+
+    timed_read_script = <<~'BASH'
+      coproc HOLDER { while :; do :; done; }
+      holder_pid=$HOLDER_PID
+      IFS= read -r -t 0.5 value <&"${HOLDER[0]}"
+      status=$?
+      kill "$holder_pid"
+      wait "$holder_pid" || :
+      printf 'read-timeout=%s\n' "$status"
+    BASH
+    assert_equal "read-timeout=142\n",
+      kandelo_run_wasm(bin/"bash", ["-c", timed_read_script], env: env)
+
+    fc_input = <<~'BASH'
+      history -c
+      printf 'fc-replay\n' >> fc.log
+      fc -e : -1
+      exit
+    BASH
+    kandelo_run_wasm(
+      bin/"bash", ["--noprofile", "--norc", "-i"], env: env, stdin: fc_input
+    )
+    assert_equal "fc-replay\nfc-replay\n", (testpath/"fc.log").read
 
     language_script = <<~'BASH'
       set -u
@@ -198,12 +221,12 @@ class Bash < Formula
     assert_equal "child=two words status=9\n",
       kandelo_run_wasm(bin/"bash", ["-c", recursive_script], env: env)
 
-    fifo_script = <<~'BASH'
+    process_substitution_script = <<~'BASH'
       IFS= read -r value < <(printf 'fifo-ready\n')
       printf 'process-substitution=%s\n' "$value"
     BASH
     assert_equal "process-substitution=fifo-ready\n",
-      kandelo_run_wasm(bin/"bash", ["-c", fifo_script], env: env)
+      kandelo_run_wasm(bin/"bash", ["-c", process_substitution_script], env: env)
 
     signal_script = <<~'BASH'
       trap 'printf "signal=USR1\n"' USR1
@@ -244,6 +267,46 @@ class Bash < Formula
     inreplace "unwind_prot.c",
       "(*(elt->head.cleanup)) (elt->arg.v);",
       "((void (*)(void *))(elt->head.cleanup)) (elt->arg.v);"
+
+    inreplace "builtins/source.def" do |s|
+      s.sub!(
+        "add_unwind_protect ((Function *)maybe_pop_dollar_vars, (char *)NULL);",
+        "add_unwind_protect (maybe_pop_dollar_vars_w, (char *)NULL);",
+      )
+      marker = "/* Read and execute commands from the file passed as argument.  Guess what."
+      s.sub!(marker, <<~C + marker)
+        static void
+        maybe_pop_dollar_vars_w (void *unused)
+        {
+          maybe_pop_dollar_vars ();
+        }
+
+      C
+    end
+
+    inreplace "builtins/read.def" do |s|
+      marker = "void\ncheck_read_timeout ()"
+      s.sub!(marker, <<~C + marker)
+        static void
+        reset_timeout_w (void *unused)
+        {
+          reset_timeout ();
+        }
+
+      C
+    end
+
+    inreplace "builtins/fc.def" do |s|
+      marker = "/* String to execute on a file that we want to edit. */"
+      s.sub!(marker, <<~C + marker)
+        static void
+        set_verbose_flag_w (void *unused)
+        {
+          set_verbose_flag ();
+        }
+
+      C
+    end
 
     inreplace "builtins/evalstring.c" do |s|
       s.sub!(
@@ -307,7 +370,6 @@ class Bash < Formula
       extern void pop_context_w (void *unused);
       extern void bashline_reset_event_hook_w (void *unused);
       extern void merge_temporary_env_w (void *unused);
-      extern void bashline_reinitialize_w (void *unused);
       extern void close_w (void *fdp);
       extern void unlink_w (void *path);
       #endif
@@ -323,7 +385,6 @@ class Bash < Formula
       extern void pop_context (void);
       extern void bashline_reset_event_hook (void);
       extern void merge_temporary_env (void);
-      extern void bashline_reinitialize (void);
 
       void pop_stream_w (void *unused) { pop_stream (); }
       void parser_restore_alias_w (void *unused) { parser_restore_alias (); }
@@ -331,7 +392,6 @@ class Bash < Formula
       void pop_context_w (void *unused) { pop_context (); }
       void bashline_reset_event_hook_w (void *unused) { bashline_reset_event_hook (); }
       void merge_temporary_env_w (void *unused) { merge_temporary_env (); }
-      void bashline_reinitialize_w (void *unused) { bashline_reinitialize (); }
       void close_w (void *fdp) { (void)close ((int)(long)fdp); }
       void unlink_w (void *path) { (void)unlink ((const char *)path); }
     C
