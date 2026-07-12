@@ -314,12 +314,13 @@ module KandeloFormulaSupport
   # `exec_programs:` stages explicit guest exec targets, `guest_files:` stages
   # ordinary files in the guest VFS, `writable_host_directories:` exposes
   # explicit host directories as writable guest mounts for output validation,
-  # and `expected_status:` permits tests for specified nonzero results such as
-  # a grep no-match status.
+  # `expected_fork_descendants:` keeps the host alive until at least that many
+  # fork descendants have exited successfully, and `expected_status:`
+  # permits tests for specified nonzero results such as a grep no-match status.
   def kandelo_run_wasm(
     bin_path, argv, env: {}, stdin: nil, merge_stderr: false, network: false,
     preserve_argv0: false, argv0: nil, exec_programs: {}, guest_files: {},
-    writable_host_directories: {}, expected_status: 0
+    writable_host_directories: {}, expected_fork_descendants: 0, expected_status: 0
   )
     root = kandelo_require_root!
     if !argv0.nil? && (
@@ -328,6 +329,8 @@ module KandeloFormulaSupport
     )
       odie "guest argv0 must be a nonempty normalized absolute path: #{argv0.inspect}"
     end
+    valid_descendant_count = expected_fork_descendants.is_a?(Integer) && expected_fork_descendants >= 0
+    odie "expected fork descendant count must be a nonnegative integer" unless valid_descendant_count
     if (node = ENV.fetch("HOMEBREW_KANDELO_NODE", nil)).to_s != ""
       ENV.prepend_path "PATH", File.dirname(node)
     end
@@ -347,7 +350,8 @@ module KandeloFormulaSupport
     command = +"cd "
     command << Shellwords.escape(root) << " && "
     isolated_runner = network || preserve_argv0 || !argv0.nil? || exec_programs.any? ||
-                      guest_files.any? || writable_host_directories.any?
+                      guest_files.any? || writable_host_directories.any? ||
+                      expected_fork_descendants.positive?
     if isolated_runner
       guest_env = JSON.generate(env.transform_values(&:to_s))
       guest_exec_programs = JSON.generate(exec_programs.transform_values(&:to_s))
@@ -359,6 +363,9 @@ module KandeloFormulaSupport
       command << "KANDELO_FORMULA_WRITABLE_HOST_DIRS_JSON=#{Shellwords.escape(writable_mounts)} "
       command << "KANDELO_FORMULA_ARGV0=#{Shellwords.escape(argv0.to_s)} " if argv0
       command << "KANDELO_FORMULA_ENABLE_NETWORK=#{network ? 1 : 0} "
+      if expected_fork_descendants.positive?
+        command << "KANDELO_FORMULA_EXPECTED_FORK_DESCENDANTS=#{expected_fork_descendants} "
+      end
     else
       env.each { |key, value| command << "#{key}=#{Shellwords.escape(value.to_s)} " }
     end
