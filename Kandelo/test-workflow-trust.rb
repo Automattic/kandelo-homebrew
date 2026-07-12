@@ -37,6 +37,20 @@ def values_for_key(node, wanted, values = [])
   values
 end
 
+def deep_copy(value)
+  Marshal.load(Marshal.dump(value))
+end
+
+def expect_rejection(label)
+  rejected = false
+  begin
+    yield
+  rescue KeyError, RuntimeError
+    rejected = true
+  end
+  check(rejected, "self-test accepted #{label}")
+end
+
 def keys_named(node, wanted, matches = [])
   case node
   when Hash
@@ -104,7 +118,10 @@ def check_dry_run(workflow)
         "dry-run workflow permissions are not exact")
 
   jobs = workflow_jobs(workflow)
-  check_default_branch(job_steps(jobs.fetch("validate-request"), "dry-run validation"), "dry-run workflow")
+  check(jobs.keys.sort == %w[dry-run validate-request], "dry-run workflow has an unexpected job set")
+  validation = jobs.fetch("validate-request")
+  check(!validation.key?("permissions"), "dry-run validation overrides read-only permissions")
+  check_default_branch(job_steps(validation, "dry-run validation"), "dry-run workflow")
   caller = jobs.fetch("dry-run")
   check(exact_permissions?(caller["permissions"], READ_PERMISSIONS),
         "dry-run caller permissions are not exact")
@@ -116,6 +133,8 @@ def check_dry_run(workflow)
         inputs["tap-repository"] == "Automattic/kandelo-homebrew",
         "dry-run caller does not use first-party repositories")
   check(inputs["dry-run"] == true, "dry-run caller does not pass literal dry-run mode")
+  expected_uses = ["Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@main"]
+  check(values_for_key(workflow, "uses") == expected_uses, "dry-run action set changed")
 end
 
 def check_publish(workflow)
@@ -125,6 +144,7 @@ def check_publish(workflow)
         "publish workflow defaults are not read-only")
 
   jobs = workflow_jobs(workflow)
+  check(jobs.keys.sort == %w[publish validate-request], "publish workflow has an unexpected job set")
   validation = jobs.fetch("validate-request")
   check(exact_permissions?(validation["permissions"], READ_PERMISSIONS),
         "publication validation permissions are not read-only")
@@ -146,21 +166,35 @@ def check_publish(workflow)
   serialized = workflow.to_s
   check(!serialized.include?("client_payload.kandelo_ref") &&
         !serialized.include?("client_payload.tap_ref"), "publisher accepts executable refs")
+  expected_uses = ["Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@main"]
+  check(values_for_key(workflow, "uses") == expected_uses, "publish action set changed")
 end
 
 def check_contract_workflow(workflow)
+  events = workflow_events(workflow)
+  check(events.keys.sort == %w[pull_request push], "contract-check workflow has unexpected events")
   expected = { "contents" => "read" }
   check(exact_permissions?(workflow["permissions"], expected),
         "contract-check workflow permissions are not exact")
+  jobs = workflow_jobs(workflow)
+  check(jobs.keys == ["publisher-trust"], "contract-check workflow has an unexpected job set")
+  job = jobs.fetch("publisher-trust")
+  check(!job.key?("permissions"), "contract-check job overrides read-only permissions")
   uses = values_for_key(workflow, "uses")
-  check(uses.include?("actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"),
-        "contract-check checkout action is not pinned")
-  check(uses.include?("ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9"),
-        "contract-check Ruby action is not pinned")
+  expected_uses = [
+    "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+    "ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9",
+  ]
+  check(uses == expected_uses, "contract-check action set or pins changed")
+  ruby_step = job_steps(job, "contract-check").find do |step|
+    step["uses"] == "ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9"
+  end
+  check(ruby_step&.dig("with", "ruby-version") == "3.4",
+        "contract-check Ruby version changed")
   check_common(workflow, "contract-check workflow")
 end
 
-def self_test
+def self_test(dry_run, publish, contract)
   fixture = YAML.safe_load(<<~YAML, aliases: false)
     on:
       workflow_dispatch: {}
@@ -183,13 +217,71 @@ def self_test
         "self-test missed folded cache action")
   check(values_for_key(fixture, "run").first.include?("${{"),
         "self-test missed folded shell expression")
+
+  expect_rejection("a write-capable dry-run validation job") do
+    mutated = deep_copy(dry_run)
+    mutated.dig("jobs", "validate-request")["permissions"] = { "contents" => "write" }
+    check_dry_run(mutated)
+  end
+  expect_rejection("an extra dry-run backdoor job") do
+    mutated = deep_copy(dry_run)
+    mutated.fetch("jobs")["backdoor"] = {
+      "permissions" => { "contents" => "write", "packages" => "write" },
+      "uses" => "owner/repo/.github/workflows/write.yml@main",
+    }
+    check_dry_run(mutated)
+  end
+  expect_rejection("a dry-run cache restore") do
+    mutated = deep_copy(dry_run)
+    mutated.dig("jobs", "validate-request", "steps") << {
+      "uses" => "actions/cache/restore@v4",
+    }
+    check_dry_run(mutated)
+  end
+  expect_rejection("a dry-run shell expression") do
+    mutated = deep_copy(dry_run)
+    mutated.dig("jobs", "validate-request", "steps") << {
+      "run" => 'echo "${{ github.token }}"',
+    }
+    check_dry_run(mutated)
+  end
+  expect_rejection("an extra publish backdoor job") do
+    mutated = deep_copy(publish)
+    mutated.fetch("jobs")["backdoor"] = {
+      "permissions" => { "contents" => "write", "packages" => "write" },
+      "uses" => "owner/repo/.github/workflows/write.yml@main",
+    }
+    check_publish(mutated)
+  end
+  expect_rejection("a write-capable contract-check job") do
+    mutated = deep_copy(contract)
+    mutated.dig("jobs", "publisher-trust")["permissions"] = { "contents" => "write" }
+    check_contract_workflow(mutated)
+  end
+  expect_rejection("an extra contract-check job") do
+    mutated = deep_copy(contract)
+    mutated.fetch("jobs")["backdoor"] = {
+      "permissions" => { "contents" => "write" },
+      "runs-on" => "ubuntu-latest",
+      "steps" => [{ "run" => "true" }],
+    }
+    check_contract_workflow(mutated)
+  end
+  expect_rejection("an unpinned Ruby setup action") do
+    mutated = deep_copy(contract)
+    mutated.dig("jobs", "publisher-trust", "steps") << { "uses" => "ruby/setup-ruby@v1" }
+    check_contract_workflow(mutated)
+  end
 end
 
 begin
-  self_test
-  check_dry_run(load_workflow(DRY_RUN_PATH))
-  check_publish(load_workflow(PUBLISH_PATH))
-  check_contract_workflow(load_workflow(CONTRACT_PATH))
+  dry_run = load_workflow(DRY_RUN_PATH)
+  publish = load_workflow(PUBLISH_PATH)
+  contract = load_workflow(CONTRACT_PATH)
+  self_test(dry_run, publish, contract)
+  check_dry_run(dry_run)
+  check_publish(publish)
+  check_contract_workflow(contract)
   puts "test-workflow-trust.rb: ok"
 rescue KeyError, Psych::Exception, RuntimeError => e
   warn "test-workflow-trust.rb: #{e.message}"
