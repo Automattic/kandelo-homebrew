@@ -133,7 +133,11 @@ gh api --method POST repos/Automattic/kandelo-homebrew/dispatches \
 
 Replace `main` with a reviewed branch name or exact commit SHA when the dry run
 needs to execute unmerged tap or Kandelo code. Both refs are data passed to the
-read-only publisher; they never select the dispatch workflow definition.
+publisher; they never select the dispatch workflow definition. The caller grants
+the reusable workflow's maximum permission ceiling because called workflows
+cannot elevate caller authority. The reusable workflow narrows every scheduled
+dry-run job to read-only permissions, and its upload and tap-finalization jobs
+are not scheduled.
 
 Write publication accepts formulae, arches, and an optional release tag, but
 hardcodes both executable repositories to reviewed `main`:

@@ -181,8 +181,8 @@ def check_dry_run(workflow)
         "dry-run caller execution contract changed")
   check(caller["needs"] == ["validate-request"],
         "dry-run caller bypasses request validation")
-  check(exact_permissions?(caller["permissions"], READ_PERMISSIONS),
-        "dry-run caller permissions are not exact")
+  check(exact_permissions?(caller["permissions"], WRITE_PERMISSIONS),
+        "dry-run caller permission ceiling is not exact")
   check(caller["uses"] ==
         "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@main",
         "dry-run caller does not use the reviewed publisher")
@@ -381,6 +381,11 @@ def self_test(dry_run, publish, contract)
   expect_rejection("a self-hosted dry-run validation") do
     mutated = deep_copy(dry_run)
     mutated.dig("jobs", "validate-request")["runs-on"] = "self-hosted"
+    check_dry_run(mutated)
+  end
+  expect_rejection("a dry-run caller that cannot satisfy the reusable permission ceiling") do
+    mutated = deep_copy(dry_run)
+    mutated.dig("jobs", "dry-run")["permissions"] = READ_PERMISSIONS
     check_dry_run(mutated)
   end
   expect_rejection("an extra dry-run backdoor job") do
