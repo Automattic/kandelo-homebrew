@@ -168,7 +168,7 @@ class Unzip < Formula
       (bin/"unzipsfx").binread + "\0".b + encode_uleb.call(section_payload.bytesize) + section_payload,
     )
     self_extractor.chmod 0755
-    guest_sfx = "/tmp/fixture-sfx.wasm"
+    guest_sfx = "/usr/local/bin/fixture-sfx.wasm"
     sfx_program = { guest_sfx => self_extractor }
     sfx_listing = kandelo_run_wasm(
       self_extractor, ["-t"], argv0: guest_sfx, exec_programs: sfx_program
@@ -178,13 +178,14 @@ class Unzip < Formula
 
     sfx_extracted = testpath/"sfx-extracted"
     sfx_extracted.mkpath
-    assert_empty kandelo_run_wasm(
+    sfx_output = kandelo_run_wasm(
       self_extractor,
       ["-q", "-d", "/work"],
       argv0:                     guest_sfx,
       exec_programs:             sfx_program,
       writable_host_directories: { "/work" => sfx_extracted },
     )
+    assert_match(/^UnZipSFX 6\.00 /, sfx_output)
     assert_equal "alpha from Kandelo\n" * 64, (sfx_extracted/"alpha.txt").read
     assert_equal "beta from Kandelo\n" * 48, (sfx_extracted/"nested/beta.txt").read
 
