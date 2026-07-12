@@ -95,11 +95,13 @@ class Wget < Formula
 
     kandelo_install_bin(buildpath/"src", "wget", "wget")
     etc.install buildpath/"doc/sample.wgetrc" => "wgetrc"
+    info.install buildpath/"doc/wget.info"
     man1.install buildpath/"doc/wget.1"
   end
 
   test do
     assert_path_exists etc/"wgetrc"
+    assert_path_exists info/"wget.info"
     assert_path_exists man1/"wget.1"
 
     test_wgetrc = testpath/"wgetrc"
