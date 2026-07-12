@@ -14,7 +14,7 @@ def check(condition, message)
 end
 
 def load_workflow(path)
-  workflow = YAML.safe_load_file(path, aliases: false)
+  workflow = YAML.safe_load(File.read(path), aliases: false)
   check(workflow.is_a?(Hash), "#{File.basename(path)} is not a workflow mapping")
   workflow
 end
@@ -69,6 +69,21 @@ def exact_permissions?(actual, expected)
   actual.is_a?(Hash) && actual.transform_keys(&:to_s) == expected
 end
 
+def normalized_top_level_keys(workflow, label)
+  keys = workflow.keys.map { |key| key == true ? "on" : key.to_s }
+  check(keys.uniq.length == keys.length, "#{label} has ambiguous top-level keys")
+  keys
+end
+
+def check_workflow_header(workflow, label, expected_name, expected_keys, expected_concurrency = nil)
+  actual_keys = normalized_top_level_keys(workflow, label)
+  check(actual_keys.sort == expected_keys.sort, "#{label} top-level contract changed")
+  check(workflow["name"] == expected_name, "#{label} name changed")
+  return unless expected_keys.include?("concurrency")
+
+  check(workflow["concurrency"] == expected_concurrency, "#{label} concurrency changed")
+end
+
 def workflow_jobs(workflow)
   jobs = workflow["jobs"]
   check(jobs.is_a?(Hash), "workflow jobs: value is not a mapping")
@@ -121,6 +136,12 @@ READ_PERMISSIONS = { "contents" => "read", "packages" => "read", "actions" => "r
 WRITE_PERMISSIONS = { "contents" => "write", "packages" => "write", "actions" => "read" }.freeze
 
 def check_dry_run(workflow)
+  check_workflow_header(
+    workflow,
+    "dry-run workflow",
+    "Dry-run Kandelo bottles",
+    %w[jobs name on permissions]
+  )
   check_dispatch(workflow, "dry-run-kandelo-bottles", "dry-run workflow")
   check_common(workflow, "dry-run workflow")
   check(exact_permissions?(workflow["permissions"], READ_PERMISSIONS),
@@ -180,6 +201,17 @@ def check_dry_run(workflow)
 end
 
 def check_publish(workflow)
+  expected_concurrency = {
+    "group" => 'kandelo-homebrew-bottle-publish-${{ github.event.client_payload.release_tag || github.run_id }}',
+    "cancel-in-progress" => false,
+  }
+  check_workflow_header(
+    workflow,
+    "publish workflow",
+    "Publish Kandelo bottles",
+    %w[concurrency jobs name on permissions],
+    expected_concurrency
+  )
   check_dispatch(workflow, "publish-kandelo-bottles", "publish workflow")
   check_common(workflow, "publish workflow")
   check(exact_permissions?(workflow["permissions"], READ_PERMISSIONS),
@@ -244,6 +276,12 @@ def check_publish(workflow)
 end
 
 def check_contract_workflow(workflow)
+  check_workflow_header(
+    workflow,
+    "contract-check workflow",
+    "Tap contract checks",
+    %w[jobs name on permissions]
+  )
   events = workflow_events(workflow)
   watched_paths = [
     ".github/workflows/**",
@@ -314,6 +352,16 @@ def self_test(dry_run, publish, contract)
   check(values_for_key(fixture, "run").first.include?("${{"),
         "self-test missed folded shell expression")
 
+  expect_rejection("a dry-run top-level BASH_ENV injection") do
+    mutated = deep_copy(dry_run)
+    mutated["env"] = { "BASH_ENV" => "/tmp/untrusted-bash-env" }
+    check_dry_run(mutated)
+  end
+  expect_rejection("a renamed dry-run workflow") do
+    mutated = deep_copy(dry_run)
+    mutated["name"] = "Trusted-looking dry run"
+    check_dry_run(mutated)
+  end
   expect_rejection("a write-capable dry-run validation job") do
     mutated = deep_copy(dry_run)
     mutated.dig("jobs", "validate-request")["permissions"] = { "contents" => "write" }
@@ -357,6 +405,21 @@ def self_test(dry_run, publish, contract)
     }
     check_dry_run(mutated)
   end
+  expect_rejection("a publish top-level BASH_ENV injection") do
+    mutated = deep_copy(publish)
+    mutated["env"] = { "BASH_ENV" => "/tmp/untrusted-bash-env" }
+    check_publish(mutated)
+  end
+  expect_rejection("a renamed publish workflow") do
+    mutated = deep_copy(publish)
+    mutated["name"] = "Trusted-looking publisher"
+    check_publish(mutated)
+  end
+  expect_rejection("changed publication concurrency") do
+    mutated = deep_copy(publish)
+    mutated.fetch("concurrency")["cancel-in-progress"] = true
+    check_publish(mutated)
+  end
   expect_rejection("an extra publish backdoor job") do
     mutated = deep_copy(publish)
     mutated.fetch("jobs")["backdoor"] = {
@@ -371,6 +434,18 @@ def self_test(dry_run, publish, contract)
     caller.delete("needs")
     caller.fetch("with")["formulae"] = "${{ github.event.client_payload.formulae }}"
     check_publish(mutated)
+  end
+  expect_rejection("contract-check top-level run defaults") do
+    mutated = deep_copy(contract)
+    mutated["defaults"] = {
+      "run" => { "shell" => "bash -c 'exit 0' {0}" },
+    }
+    check_contract_workflow(mutated)
+  end
+  expect_rejection("a renamed contract-check workflow") do
+    mutated = deep_copy(contract)
+    mutated["name"] = "Trusted-looking contract checks"
+    check_contract_workflow(mutated)
   end
   expect_rejection("a write-capable contract-check job") do
     mutated = deep_copy(contract)
