@@ -53,8 +53,8 @@ jobs:
   dry-run:
     needs: [validate-request]
     permissions:
-      contents: read
-      packages: read
+      contents: write
+      packages: write
       actions: read
     uses: Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@main
     with:
