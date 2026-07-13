@@ -10,6 +10,7 @@ class Fbdoom < Formula
   sha256 "77f57cee68fed438dffdba96f6070b8975c16652a63ddf4fb967994e5585a38a"
   license "GPL-2.0-or-later"
 
+  depends_on "binaryen" => :build
   depends_on "wabt" => [:build, :test]
   skip_clean "bin/fbdoom"
 
@@ -60,7 +61,8 @@ class Fbdoom < Formula
         "LIBS=-lm",
         "NOSDL=1"
 
-      validate_artifact!(artifact, root)
+      kandelo_validate_wasm_artifact(artifact, fork: :forbidden)
+      validate_imports!(artifact)
     end
 
     kandelo_install_bin(buildpath/"fbdoom", "fbdoom", "fbdoom")
@@ -94,39 +96,9 @@ class Fbdoom < Formula
     system kandelo_host_tool("bash"), "-c", script, "bash", *patches
   end
 
-  def validate_artifact!(artifact, root)
-    expected_abi = (Pathname(root)/"crates/shared/src/lib.rs").read[
-      /^pub const ABI_VERSION: u32 = (\d+);$/,
-      1,
-    ]
-    odie "could not read Kandelo ABI version" if expected_abi.nil?
-
-    host_dist = Pathname(root)/"host/dist"
-    rm_r host_dist if host_dist.exist?
-    abi_probe = <<~JS
-      import { readFileSync } from "node:fs";
-      import { pathToFileURL } from "node:url";
-      const { extractAbiVersion } = await import(pathToFileURL(process.argv[1]).href);
-      const bytes = readFileSync(process.argv[2]);
-      const program = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-      const abi = extractAbiVersion(program);
-      if (abi === null) process.exit(2);
-      process.stdout.write(String(abi));
-    JS
-    artifact_abi = cd(root) do
-      Utils.safe_popen_read(
-        "node", "--import", "tsx/esm", "--input-type=module", "--eval", abi_probe,
-        Pathname(root)/"host/src/constants.ts", artifact
-      ).strip
-    end
-    odie "fbDOOM ABI #{artifact_abi} does not match Kandelo ABI #{expected_abi}" if artifact_abi != expected_abi
-
-    guards = Pathname(root)/"scripts/wasm-artifact-guards.sh"
+  def validate_imports!(artifact)
     system "bash", "-c", <<~SH
       set -euo pipefail
-      . #{guards.to_s.shellescape}
-      wasm_require_no_legacy_asyncify #{artifact.to_s.shellescape}
-      wasm_require_fork_instrumentation_if_needed #{artifact.to_s.shellescape}
       unexpected_env_imports=$(wasm-objdump -x #{artifact.to_s.shellescape} |
         awk '/<- env[.]/ { sub(/^.*<- env[.]/, ""); print $1 }' |
         grep -Ev '^(__channel_base|memory|setjmp|longjmp)$' || true)
@@ -136,18 +108,6 @@ class Fbdoom < Formula
         exit 1
       fi
     SH
-
-    binary = artifact.binread
-    {
-      "formula build path"    => buildpath.to_s,
-      "formula Cellar path"   => prefix.to_s,
-      "Kandelo checkout path" => root.to_s,
-      "Nix store path"        => "/nix/store/",
-      "temporary build path"  => "/private/tmp/",
-    }.each do |description, marker|
-      odie "fbDOOM embeds #{description}: #{marker}" if binary.include?(marker)
-    end
-    odie "fbDOOM embeds a builder home path" if binary.match?(%r{/Users/[^/]+/})
   end
 
   test do
