@@ -61,6 +61,7 @@ Current migration controls and pilots include:
   cross-process procfs state.
 - `ctags`, Universal Ctags' maintained tag generator, `readtags` query client,
   and optscript interpreter with complete C and C++ workflows.
+- `netcat`, GNU TCP and UDP client/listener workflows across virtual Kandelo machines.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node
