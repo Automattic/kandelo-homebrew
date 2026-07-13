@@ -1,4 +1,5 @@
 require (Tap.fetch("automattic", "kandelo-homebrew").path/"Kandelo/formula_support/kandelo_formula_support").to_s
+require "digest"
 
 class Libcxx < Formula
   include KandeloFormulaSupport
@@ -10,9 +11,12 @@ class Libcxx < Formula
   license "Apache-2.0" => { with: "LLVM-exception" }
 
   depends_on "cmake" => :build
+  depends_on "wabt" => :test
 
   skip_clean "lib/libc++.a"
+  skip_clean "lib/libc++-pic.a"
   skip_clean "lib/libc++abi.a"
+  skip_clean "lib/libc++abi-pic.a"
   skip_clean "lib/libc++experimental.a"
 
   # The register-save assembly files emit no code for Wasm, but include
@@ -39,7 +43,7 @@ class Libcxx < Formula
       # real one. In particular, it reports __cxa_thread_atexit_impl even
       # though Kandelo's libc does not export it. Seed the audited target facts
       # instead of inheriting host or linker-policy false positives.
-      system "cmake", "-S", "runtimes", "-B", "build",
+      cmake_args = [
         "-DCMAKE_INSTALL_PREFIX=#{prefix}",
         "-DCMAKE_INSTALL_LIBDIR=lib",
         "-DCMAKE_BUILD_TYPE=Release",
@@ -50,8 +54,6 @@ class Libcxx < Formula
         "-DCMAKE_AR=#{kandelo_ar(root)}",
         "-DCMAKE_RANLIB=#{kandelo_ranlib(root)}",
         "-DCMAKE_NM=#{kandelo_tool("nm", root)}",
-        "-DCMAKE_C_FLAGS=#{cflags}",
-        "-DCMAKE_CXX_FLAGS=#{cflags}",
         "-DCMAKE_SIZEOF_VOID_P=#{pointer_size}",
         "-DLLVM_ENABLE_RUNTIMES=libcxx;libcxxabi;libunwind",
         "-DLIBCXX_ENABLE_SHARED=OFF",
@@ -102,7 +104,20 @@ class Libcxx < Formula
         "-DLIBUNWIND_HAS_DL_LIB=ON",
         "-DLIBUNWIND_HAS_PTHREAD_LIB=ON",
         "-DLIBUNWIND_HAS_ROOT_LIB=OFF",
-        "-DLIBUNWIND_HAS_BSD_LIB=OFF"
+        "-DLIBUNWIND_HAS_BSD_LIB=OFF",
+      ]
+      system "cmake", "-S", "runtimes", "-B", "build",
+        "-DCMAKE_C_FLAGS=#{cflags}", "-DCMAKE_CXX_FLAGS=#{cflags}", *cmake_args
+
+      # Main Wasm modules use the default archives. Dynamic side modules
+      # require every absorbed object to use position-independent Wasm
+      # relocations, so build a genuinely separate PIC tree instead of
+      # relabeling the default archives or changing their code generation for
+      # existing consumers.
+      pic_cflags = "#{cflags} -fPIC"
+      system "cmake", "-S", "runtimes", "-B", "build-pic",
+        "-DCMAKE_C_FLAGS=#{pic_cflags}", "-DCMAKE_CXX_FLAGS=#{pic_cflags}",
+        "-DCMAKE_POSITION_INDEPENDENT_CODE=ON", *cmake_args
 
       target_libraries = %w[
         LIBCXX_HAS_GCC_LIB=OFF
@@ -124,18 +139,33 @@ class Libcxx < Formula
         LIBUNWIND_HAS_ROOT_LIB=OFF
         LIBUNWIND_HAS_BSD_LIB=OFF
       ]
-      cache = (buildpath/"build/CMakeCache.txt").read
-      target_libraries.each do |fact|
-        variable, expected = fact.split("=", 2)
-        entry = cache.each_line.find { |line| line.start_with?("#{variable}:") }
-        value = entry ? entry.split("=", 2).last.strip : nil
-        next if value == expected
+      %w[build build-pic].each do |build_dir|
+        cache = (buildpath/build_dir/"CMakeCache.txt").read
+        target_libraries.each do |fact|
+          variable, expected = fact.split("=", 2)
+          entry = cache.each_line.find { |line| line.start_with?("#{variable}:") }
+          value = entry ? entry.split("=", 2).last.strip : nil
+          next if value == expected
 
-        odie "CMake target-library fact drifted: #{variable}=#{value.inspect}"
+          odie "CMake target-library fact drifted in #{build_dir}: #{variable}=#{value.inspect}"
+        end
       end
 
       system "cmake", "--build", "build", "--parallel"
       system "cmake", "--install", "build"
+      system "cmake", "--build", "build-pic", "--parallel"
+
+      {
+        "libc++-pic.a"    => "libc++.a",
+        "libc++abi-pic.a" => "libc++abi.a",
+      }.each do |installed_name, built_name|
+        candidates = buildpath.glob("build-pic/**/#{built_name}").reject do |candidate|
+          candidate.to_s.include?("/CMakeFiles/")
+        end
+        odie "expected one PIC #{built_name}, found #{candidates.map(&:to_s).inspect}" if candidates.length != 1
+
+        lib.install candidates.fetch(0) => installed_name
+      end
     end
 
     # libc++abi contains the static unwinder; consumers intentionally need only
@@ -146,7 +176,9 @@ class Libcxx < Formula
   test do
     root = kandelo_require_root!
     assert_path_exists lib/"libc++.a"
+    assert_path_exists lib/"libc++-pic.a"
     assert_path_exists lib/"libc++abi.a"
+    assert_path_exists lib/"libc++abi-pic.a"
     assert_path_exists lib/"libc++experimental.a"
     assert_path_exists include/"c++/v1/vector"
     assert_path_exists include/"libunwind.h"
@@ -154,7 +186,7 @@ class Libcxx < Formula
     refute_path_exists lib/"libunwind.a"
 
     builder_path_markers = %w[/private/tmp/ /nix/store/]
-    %w[libc++.a libc++abi.a libc++experimental.a].each do |archive|
+    %w[libc++.a libc++-pic.a libc++abi.a libc++abi-pic.a libc++experimental.a].each do |archive|
       binary = File.binread(lib/archive)
       builder_path_markers.each do |marker|
         refute binary.include?(marker), "#{archive} contains builder path marker #{marker}"
@@ -164,6 +196,10 @@ class Libcxx < Formula
       refute binary.include?(root), "#{archive} contains the Kandelo checkout path"
       refute binary.include?(prefix.to_s), "#{archive} contains its Homebrew Cellar path"
     end
+    refute_equal Digest::SHA256.file(lib/"libc++.a").hexdigest,
+      Digest::SHA256.file(lib/"libc++-pic.a").hexdigest
+    refute_equal Digest::SHA256.file(lib/"libc++abi.a").hexdigest,
+      Digest::SHA256.file(lib/"libc++abi-pic.a").hexdigest
 
     source = testpath/"libcxx-smoke.cpp"
     wasm = testpath/"libcxx-smoke.wasm"
@@ -231,6 +267,89 @@ class Libcxx < Formula
         "-L#{lib}", "-lc++", "-lc++abi", "-o", wasm
     end
     assert_equal "libcxx-ok\n", kandelo_run_wasm(wasm, [])
+
+    side_source = testpath/"libcxx-pic-side.cpp"
+    side_module = testpath/"libcxx-pic-side.so"
+    loader_source = testpath/"libcxx-pic-loader.c"
+    loader = testpath/"libcxx-pic-loader.wasm"
+    side_source.write <<~CPP
+      #include <algorithm>
+      #include <cstring>
+      #include <string>
+      #include <typeinfo>
+
+      struct base { virtual ~base() = default; };
+      struct derived : base {};
+
+      extern "C" int kandelo_libcxx_pic_value(char *output, unsigned int capacity) {
+        derived value;
+        base *polymorphic = &value;
+        const std::string message("libcxx-pic-ok");
+        if (dynamic_cast<derived *>(polymorphic) == nullptr || capacity <= message.size()) return 1;
+        std::copy(message.begin(), message.end(), output);
+        output[message.size()] = '\\0';
+        return 0;
+      }
+    CPP
+    loader_source.write <<~CPP
+      #include <stdio.h>
+      #include <stdlib.h>
+      #include <string.h>
+      #include <dlfcn.h>
+
+      typedef int (*value_fn)(char *, unsigned int);
+
+      int main(int argc, char **argv) {
+        char value[32] = {};
+        void *allocation;
+        if (argc != 2) return 5;
+        allocation = calloc(1, 1);
+        if (allocation == NULL) return 6;
+        free(allocation);
+        void *module = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+        if (module == NULL) {
+          fprintf(stderr, "dlopen: %s\\n", dlerror());
+          return 1;
+        }
+        value_fn function = (value_fn)dlsym(module, "kandelo_libcxx_pic_value");
+        if (function == NULL || function(value, sizeof(value)) != 0) return 2;
+        if (strcmp(value, "libcxx-pic-ok") != 0) return 3;
+        puts(value);
+        return dlclose(module) == 0 ? 0 : 4;
+      }
+    CPP
+
+    kandelo_wasm_build do |root|
+      cxx = kandelo_tool("c++", root)
+      common = ["-O2", "-fwasm-exceptions", "-nostdinc++", "-isystem", include/"c++/v1"]
+      system cxx, side_source, *common, "-fPIC", "-shared", "-Wl,--export=__tls_base", "-nostdlib++",
+        lib/"libc++-pic.a", lib/"libc++abi-pic.a", "-o", side_module
+
+      nonpic_module = testpath/"libcxx-nonpic-negative.so"
+      nonpic_command = [
+        cxx, side_source, *common, "-fPIC", "-shared", "-Wl,--export=__tls_base", "-nostdlib++",
+        lib/"libc++.a", lib/"libc++abi.a", "-o", nonpic_module
+      ].shelljoin
+      nonpic_output = shell_output("#{nonpic_command} 2>&1", 1)
+      assert_match(/relocation R_WASM_.*recompile with -fPIC/m, nonpic_output)
+      refute_path_exists nonpic_module
+
+      side_imports = %w[
+        __assert_fail abort aligned_alloc calloc fflush fprintf fputc free fwrite getenv malloc memchr memcmp
+        pthread_mutex_lock pthread_mutex_unlock realloc snprintf strcmp strlen vfprintf
+      ].map { |symbol| "-Wl,--undefined=#{symbol}" }
+      system kandelo_cc(root), loader_source, "-O2", "-ldl", "-Wl,--export-all", *side_imports, "-o", loader
+    end
+
+    side_info = Utils.safe_popen_read("wasm-objdump", "-x", side_module)
+    assert_match(/dylink\.0/, side_info)
+    assert_match(/memory.*<- env\.memory/, side_info)
+    assert_equal "libcxx-pic-ok\n", kandelo_run_wasm(loader, [side_module])
+    guest_side = "/usr/lib/libcxx-pic-side.so"
+    side_file = { guest_side => side_module }
+    if kandelo_arch == "wasm32"
+      assert_equal "libcxx-pic-ok\n", kandelo_run_browser_wasm(loader, [guest_side], guest_files: side_file)
+    end
   end
 end
 
