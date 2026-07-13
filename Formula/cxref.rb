@@ -287,6 +287,37 @@ class Cxref < Formula
         return target();
       }
     C
+    (workspace/"macro_functions.c").write <<~C
+      #define DEFINE(name) int name(void){return 1;}
+      #define DEFINE_P(name, parameter) int name(int parameter){return parameter;}
+      #define FORWARD(name, parameter) DEFINE_P(name, parameter)
+      #define DEFINE_REPEAT(name, parameter) int name(int parameter){return parameter + parameter;}
+
+      DEFINE(generated_definition)
+      DEFINE_P(generated_parameter,input_value)
+      DEFINE_P(first_same,same_value) DEFINE_P(second_same,same_value)
+      FORWARD(nested_generated,nested_value)
+      DEFINE_P(
+        multiline_generated,
+        multiline_value
+      )
+      DEFINE_REPEAT(repeated_generated,repeated_value)
+      #define DROP_VALUE(value)
+      #define DECLARE_VALUE(value) int value;
+      #define DECLARE_AFTER_DROP(value) DECLARE_VALUE(value)
+      #define STRINGIFY_VALUE(value) #value
+      #define SECOND_VALUE(first, second) second
+      #define DECLARE_AFTER_SECOND(value) DECLARE_VALUE(value)
+
+      DECLARE_AFTER_DROP(
+        DROP_VALUE(discarded_collision)
+        discarded_collision
+      )
+      DECLARE_AFTER_SECOND(SECOND_VALUE(
+        STRINGIFY_VALUE(string_collision),
+        string_collision
+      ))
+    C
 
     env = { "KERNEL_CWD" => "/work" }
     mount = { "/work" => workspace }
@@ -350,6 +381,37 @@ class Cxref < Formula
     assert_match(%r{^target \| /work/old_style\.c \| - \| 12$}, old_style)
     refute_match(%r{^target \| /work/old_style\.c \| after_old_style \| 12$}, old_style)
 
+    macro_functions = kandelo_run_wasm(
+      bin/"cxref", ["-cs", "macro_functions.c"], env: env, writable_host_directories: mount
+    )
+    assert_match(%r{^generated_definition \| /work/macro_functions\.c \| - \| \*6$}, macro_functions)
+    assert_match(%r{^generated_parameter \| /work/macro_functions\.c \| - \| \*7$}, macro_functions)
+    assert_match(%r{^input_value \| /work/macro_functions\.c \| generated_parameter \| \*7$}, macro_functions)
+    assert_match(%r{^input_value \| /work/macro_functions\.c \| generated_parameter \| 7$}, macro_functions)
+    assert_match(%r{^same_value \| /work/macro_functions\.c \| first_same \| \*8$}, macro_functions)
+    assert_match(%r{^same_value \| /work/macro_functions\.c \| second_same \| \*8$}, macro_functions)
+    assert_match(%r{^nested_value \| /work/macro_functions\.c \| nested_generated \| \*9$}, macro_functions)
+    assert_match(%r{^multiline_generated \| /work/macro_functions\.c \| - \| \*11$}, macro_functions)
+    assert_match(%r{^multiline_value \| /work/macro_functions\.c \| multiline_generated \| \*12$}, macro_functions)
+    assert_match(%r{^repeated_value \| /work/macro_functions\.c \| repeated_generated \| \*14$}, macro_functions)
+    assert_match(%r{^discarded_collision \| /work/macro_functions\.c \| - \| 23$}, macro_functions)
+    assert_match(%r{^discarded_collision \| /work/macro_functions\.c \| - \| \*24$}, macro_functions)
+    refute_match(%r{^discarded_collision \| /work/macro_functions\.c \| - \| \*23$}, macro_functions)
+    refute_match(%r{^discarded_collision \| /work/macro_functions\.c \| - \| 24$}, macro_functions)
+    assert_match(%r{^string_collision \| /work/macro_functions\.c \| - \| 27$}, macro_functions)
+    assert_match(%r{^string_collision \| /work/macro_functions\.c \| - \| \*28$}, macro_functions)
+    refute_match(%r{^string_collision \| /work/macro_functions\.c \| - \| \*27$}, macro_functions)
+    refute_match(%r{^string_collision \| /work/macro_functions\.c \| - \| 28$}, macro_functions)
+    assert_equal 1, macro_functions.lines.grep(/^generated_definition /).length
+    assert_equal 1, macro_functions.lines.grep(/^generated_parameter /).length
+    assert_equal 2, macro_functions.lines.grep(/^input_value /).length
+    assert_equal 4, macro_functions.lines.grep(/^same_value /).length
+    assert_equal 2, macro_functions.lines.grep(/^nested_value /).length
+    assert_equal 2, macro_functions.lines.grep(/^multiline_value /).length
+    assert_equal 2, macro_functions.lines.grep(/^repeated_value /).length
+    assert_equal 2, macro_functions.lines.grep(/^discarded_collision /).length
+    assert_equal 2, macro_functions.lines.grep(/^string_collision /).length
+
     ordered = kandelo_run_wasm(
       bin/"cxref",
       ["-cs", "-Ifirst", "-DORDERED=1", "-Isecond", "-UORDERED", "-DORDERED=2", "option_order.c"],
@@ -404,7 +466,8 @@ class Cxref < Formula
         "-cs", "-I/work/include", "-USELECT_PATH", "-DSELECT_PATH",
         "-I/work/first", "-DORDERED=1", "-I/work/second", "-UORDERED", "-DORDERED=2",
         "/work/one.c", "/work/conditional.c", "/work/review.c", "/work/option_order.c",
-        "/work/linkage_a.c", "/work/linkage_b.c", "/work/macro_generated.c", "/work/old_style.c"
+        "/work/linkage_a.c", "/work/linkage_b.c", "/work/macro_generated.c", "/work/old_style.c",
+        "/work/macro_functions.c"
       ],
       argv0:       "cxref",
       guest_files: {
@@ -419,6 +482,7 @@ class Cxref < Formula
         "/work/linkage_b.c"       => workspace/"linkage_b.c",
         "/work/macro_generated.c" => workspace/"macro_generated.c",
         "/work/old_style.c"       => workspace/"old_style.c",
+        "/work/macro_functions.c" => workspace/"macro_functions.c",
       },
       timeout_ms:  120_000,
     )
@@ -451,6 +515,32 @@ class Cxref < Formula
     assert_match(%r{^target \| /work/old_style\.c \| old_style \| 8$}, browser_output)
     assert_match(%r{^target \| /work/old_style\.c \| - \| 12$}, browser_output)
     refute_match(%r{^target \| /work/old_style\.c \| after_old_style \| 12$}, browser_output)
+    assert_match(%r{^generated_definition \| /work/macro_functions\.c \| - \| \*6$}, browser_output)
+    assert_match(%r{^generated_parameter \| /work/macro_functions\.c \| - \| \*7$}, browser_output)
+    assert_match(%r{^input_value \| /work/macro_functions\.c \| generated_parameter \| \*7$}, browser_output)
+    assert_match(%r{^same_value \| /work/macro_functions\.c \| first_same \| \*8$}, browser_output)
+    assert_match(%r{^same_value \| /work/macro_functions\.c \| second_same \| \*8$}, browser_output)
+    assert_match(%r{^nested_value \| /work/macro_functions\.c \| nested_generated \| \*9$}, browser_output)
+    assert_match(%r{^multiline_generated \| /work/macro_functions\.c \| - \| \*11$}, browser_output)
+    assert_match(%r{^multiline_value \| /work/macro_functions\.c \| multiline_generated \| \*12$}, browser_output)
+    assert_match(%r{^repeated_value \| /work/macro_functions\.c \| repeated_generated \| \*14$}, browser_output)
+    assert_match(%r{^discarded_collision \| /work/macro_functions\.c \| - \| 23$}, browser_output)
+    assert_match(%r{^discarded_collision \| /work/macro_functions\.c \| - \| \*24$}, browser_output)
+    refute_match(%r{^discarded_collision \| /work/macro_functions\.c \| - \| \*23$}, browser_output)
+    refute_match(%r{^discarded_collision \| /work/macro_functions\.c \| - \| 24$}, browser_output)
+    assert_match(%r{^string_collision \| /work/macro_functions\.c \| - \| 27$}, browser_output)
+    assert_match(%r{^string_collision \| /work/macro_functions\.c \| - \| \*28$}, browser_output)
+    refute_match(%r{^string_collision \| /work/macro_functions\.c \| - \| \*27$}, browser_output)
+    refute_match(%r{^string_collision \| /work/macro_functions\.c \| - \| 28$}, browser_output)
+    assert_equal 1, browser_output.lines.grep(/^generated_definition /).length
+    assert_equal 1, browser_output.lines.grep(/^generated_parameter /).length
+    assert_equal 2, browser_output.lines.grep(/^input_value /).length
+    assert_equal 4, browser_output.lines.grep(/^same_value /).length
+    assert_equal 2, browser_output.lines.grep(/^nested_value /).length
+    assert_equal 2, browser_output.lines.grep(/^multiline_value /).length
+    assert_equal 2, browser_output.lines.grep(/^repeated_value /).length
+    assert_equal 2, browser_output.lines.grep(/^discarded_collision /).length
+    assert_equal 2, browser_output.lines.grep(/^string_collision /).length
     assert_match(%r{^first_choice \| /work/first/choice\.h \| - \| \*1$}, browser_output)
     assert_match(%r{^final_define \| /work/option_order\.c \| - \| \*3$}, browser_output)
   end

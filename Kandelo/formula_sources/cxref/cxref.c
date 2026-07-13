@@ -47,6 +47,13 @@ typedef struct {
   LexicalScope scope;
   size_t translation_unit;
   size_t symbol_identity;
+  size_t macro_invocation_id;
+  size_t macro_argument_id;
+  size_t macro_source_identity;
+  unsigned source_start_line;
+  unsigned source_start_column;
+  unsigned source_end_line;
+  unsigned source_end_column;
   bool declaration;
   bool ordinary_identifier;
   bool declares_function;
@@ -127,10 +134,40 @@ typedef struct {
 } MacroSourceRanges;
 
 typedef struct {
+  size_t id;
+  size_t invocation_id;
+  size_t source_invocation_id;
+  size_t source_argument_id;
+  char *parameter_key;
   char *path;
-  unsigned start_line;
-  unsigned end_line;
+  MarkerRange range;
   ExpansionOrigin origin;
+} MacroArgument;
+
+typedef struct {
+  MacroArgument *items;
+  size_t length;
+  size_t capacity;
+} MacroArguments;
+
+typedef struct {
+  char *path;
+  char *invocation_path;
+  unsigned start_line;
+  unsigned start_column;
+  unsigned end_line;
+  unsigned end_column;
+  unsigned invocation_start_line;
+  unsigned invocation_start_column;
+  unsigned invocation_end_line;
+  unsigned invocation_end_column;
+  ExpansionOrigin origin;
+  size_t invocation_id;
+  size_t argument_id;
+  size_t source_invocation_id;
+  size_t source_argument_id;
+  size_t last_source_identity;
+  bool introduces_invocation;
 } ExpansionFrame;
 
 typedef struct {
@@ -145,9 +182,12 @@ typedef struct {
   ReferenceList *references;
   SourceFiles *source_files;
   size_t translation_unit;
-  MacroSourceRanges macro_arguments;
+  MacroArguments macro_arguments;
   MacroSourceRanges macro_definitions;
   ExpansionFrames expansions;
+  size_t next_macro_invocation_id;
+  size_t next_macro_argument_id;
+  size_t next_macro_source_identity;
   bool condition_markers;
   int status;
 } WalkContext;
@@ -445,6 +485,32 @@ static bool source_coordinate_offset(const SourceFile *file, unsigned line,
     return false;
   }
   *offset = line_start + column - 1;
+  return true;
+}
+
+static bool source_offset_coordinate(const SourceFile *file, size_t offset,
+                                     unsigned *line, unsigned *column) {
+  size_t low = 0;
+  size_t high = file->line_count;
+  size_t line_offset;
+
+  if (offset > file->length) {
+    return false;
+  }
+  while (low + 1 < high) {
+    size_t middle = low + (high - low) / 2;
+    if (file->line_offsets[middle] <= offset) {
+      low = middle;
+    } else {
+      high = middle;
+    }
+  }
+  line_offset = offset - file->line_offsets[low];
+  if (low >= UINT32_MAX || line_offset >= UINT32_MAX) {
+    return false;
+  }
+  *line = (unsigned)(low + 1);
+  *column = (unsigned)(line_offset + 1);
   return true;
 }
 
@@ -746,12 +812,12 @@ static LexicalScope lexical_scope_for_node(TSNode node, unsigned depth) {
   };
 }
 
-static const ExpansionFrame *active_expansion(const WalkContext *context,
-                                              ExpansionOrigin origin) {
+static ExpansionFrame *active_expansion(WalkContext *context,
+                                        ExpansionOrigin origin) {
   size_t index;
 
   for (index = context->expansions.length; index > 0; --index) {
-    const ExpansionFrame *frame = &context->expansions.items[index - 1];
+    ExpansionFrame *frame = &context->expansions.items[index - 1];
     if (frame->origin == origin) {
       return frame;
     }
@@ -775,77 +841,426 @@ enclosing_macro_expansion(const WalkContext *context) {
   return NULL;
 }
 
-static bool nullable_string_equal(const char *left, const char *right) {
-  return (left == NULL && right == NULL) ||
-         (left != NULL && right != NULL && strcmp(left, right) == 0);
-}
-
-static Reference *macro_argument_reference(WalkContext *context,
-                                           const ExpansionFrame *frame,
-                                           const char *name,
-                                           const char *function) {
+static ExpansionFrame *current_macro_source_expansion(WalkContext *context) {
   size_t index;
 
-  /* Upgrade the source argument entry instead of emitting a second reference
-   * for the expanded AST node. Discarded and stringized arguments stay as the
-   * source-only entries recorded by scan_source_range(). */
-  for (index = 0; index < context->references->length; ++index) {
-    Reference *candidate = &context->references->items[index];
-    if (candidate->macro_argument && !candidate->ordinary_identifier &&
-        strcmp(candidate->name, name) == 0 &&
-        strcmp(candidate->path, frame->path) == 0 &&
-        nullable_string_equal(candidate->function, function) &&
-        candidate->line >= frame->start_line &&
-        candidate->line <= frame->end_line) {
-      return candidate;
+  for (index = context->expansions.length; index > 0; --index) {
+    ExpansionFrame *frame = &context->expansions.items[index - 1];
+    if (frame->origin != EXPANSION_ORIGIN_NONE) {
+      return frame;
     }
   }
   return NULL;
 }
 
-static Reference *macro_definition_reference(WalkContext *context,
-                                             const ExpansionFrame *frame,
-                                             const char *name,
-                                             Reference **template) {
+static bool identifier_start(unsigned char character);
+static bool identifier_continue(unsigned char character);
+
+static int source_coordinate_compare(unsigned left_line, unsigned left_column,
+                                     unsigned right_line,
+                                     unsigned right_column) {
+  if (left_line != right_line) {
+    return left_line < right_line ? -1 : 1;
+  }
+  if (left_column != right_column) {
+    return left_column < right_column ? -1 : 1;
+  }
+  return 0;
+}
+
+static bool
+reference_is_within_source_range(const Reference *reference, const char *path,
+                                 unsigned start_line, unsigned start_column,
+                                 unsigned end_line, unsigned end_column) {
+  return reference->source_start_line != 0 &&
+         strcmp(reference->path, path) == 0 &&
+         source_coordinate_compare(start_line, start_column,
+                                   reference->source_start_line,
+                                   reference->source_start_column) <= 0 &&
+         source_coordinate_compare(reference->source_end_line,
+                                   reference->source_end_column, end_line,
+                                   end_column) <= 0;
+}
+
+static bool reference_is_within_expansion(const Reference *reference,
+                                          const ExpansionFrame *frame) {
+  return reference_is_within_source_range(
+      reference, frame->path, frame->start_line, frame->start_column,
+      frame->end_line, frame->end_column);
+}
+
+static bool source_range_is_within_expansion(const char *path,
+                                             const MarkerRange *range,
+                                             const ExpansionFrame *frame) {
+  return frame->path != NULL && strcmp(path, frame->path) == 0 &&
+         source_coordinate_compare(frame->start_line, frame->start_column,
+                                   range->start_line,
+                                   range->start_column) <= 0 &&
+         source_coordinate_compare(range->end_line, range->end_column,
+                                   frame->end_line, frame->end_column) <= 0;
+}
+
+static size_t macro_source_reference_index(WalkContext *context,
+                                           ExpansionFrame *frame,
+                                           const char *name, bool argument) {
+  size_t best = SIZE_MAX;
+  size_t fallback = SIZE_MAX;
   size_t index;
 
-  /* Replacement tokens report their definition location, but their binding
-   * and declaration role come from each expanded AST occurrence. */
-  *template = NULL;
   for (index = 0; index < context->references->length; ++index) {
-    Reference *candidate = &context->references->items[index];
-    if (!candidate->macro_replacement || strcmp(candidate->name, name) != 0 ||
-        strcmp(candidate->path, frame->path) != 0 ||
-        candidate->line < frame->start_line ||
-        candidate->line > frame->end_line) {
+    const Reference *candidate = &context->references->items[index];
+    if ((argument ? !candidate->macro_argument
+                  : !candidate->macro_replacement) ||
+        strcmp(candidate->name, name) != 0 ||
+        !reference_is_within_expansion(candidate, frame) ||
+        (argument &&
+         candidate->macro_invocation_id != frame->source_invocation_id)) {
       continue;
     }
-    if (*template == NULL) {
-      *template = candidate;
+    if (fallback == SIZE_MAX ||
+        candidate->macro_source_identity <
+            context->references->items[fallback].macro_source_identity) {
+      fallback = index;
     }
-    if (!candidate->ordinary_identifier) {
-      return candidate;
+    if (candidate->macro_source_identity > frame->last_source_identity &&
+        (best == SIZE_MAX ||
+         candidate->macro_source_identity <
+             context->references->items[best].macro_source_identity)) {
+      best = index;
     }
   }
-  return NULL;
+  if (best == SIZE_MAX) {
+    best = fallback;
+  }
+  if (best != SIZE_MAX) {
+    frame->last_source_identity =
+        context->references->items[best].macro_source_identity;
+  }
+  return best;
+}
+
+static size_t source_skip_comment(const SourceFile *file, size_t cursor,
+                                  size_t limit) {
+  if (cursor + 1 >= limit || file->text[cursor] != '/') {
+    return cursor;
+  }
+  if (file->text[cursor + 1] == '/') {
+    cursor += 2;
+    while (cursor < limit && file->text[cursor] != '\n') {
+      ++cursor;
+    }
+    return cursor;
+  }
+  if (file->text[cursor + 1] == '*') {
+    cursor += 2;
+    while (cursor + 1 < limit &&
+           !(file->text[cursor] == '*' && file->text[cursor + 1] == '/')) {
+      ++cursor;
+    }
+    return cursor + 1 < limit ? cursor + 2 : limit;
+  }
+  return cursor;
+}
+
+static size_t source_skip_quoted(const SourceFile *file, size_t cursor,
+                                 size_t limit) {
+  char quote = file->text[cursor++];
+
+  while (cursor < limit) {
+    if (file->text[cursor] == '\\' && cursor + 1 < limit) {
+      cursor += 2;
+    } else if (file->text[cursor++] == quote) {
+      break;
+    }
+  }
+  return cursor;
+}
+
+static size_t source_skip_trivia(const SourceFile *file, size_t cursor,
+                                 size_t limit) {
+  for (;;) {
+    size_t next;
+
+    while (cursor < limit) {
+      if (file->text[cursor] == ' ' || file->text[cursor] == '\t' ||
+          file->text[cursor] == '\r' || file->text[cursor] == '\n' ||
+          file->text[cursor] == '\f' || file->text[cursor] == '\v') {
+        ++cursor;
+      } else if (file->text[cursor] == '\\' && cursor + 1 < limit &&
+                 file->text[cursor + 1] == '\n') {
+        cursor += 2;
+      } else if (file->text[cursor] == '\\' && cursor + 2 < limit &&
+                 file->text[cursor + 1] == '\r' &&
+                 file->text[cursor + 2] == '\n') {
+        cursor += 3;
+      } else {
+        break;
+      }
+    }
+    next = source_skip_comment(file, cursor, limit);
+    if (next == cursor) {
+      return cursor;
+    }
+    cursor = next;
+  }
+}
+
+static bool source_invocation_end(const SourceFile *file, size_t name_end,
+                                  size_t limit, size_t *end) {
+  size_t cursor = source_skip_trivia(file, name_end, limit);
+  unsigned depth = 0;
+
+  if (cursor >= limit || file->text[cursor] != '(') {
+    return false;
+  }
+  for (; cursor < limit; ++cursor) {
+    size_t next = source_skip_comment(file, cursor, limit);
+    if (next != cursor) {
+      cursor = next - 1;
+      continue;
+    }
+    if (file->text[cursor] == '\'' || file->text[cursor] == '"') {
+      cursor = source_skip_quoted(file, cursor, limit) - 1;
+      continue;
+    }
+    if (file->text[cursor] == '(') {
+      ++depth;
+    } else if (file->text[cursor] == ')' && --depth == 0) {
+      *end = cursor + 1;
+      return true;
+    }
+  }
+  return false;
+}
+
+static void macro_source_cursor_consume_range(WalkContext *context,
+                                              ExpansionFrame *frame,
+                                              const MarkerRange *range) {
+  size_t index;
+
+  for (index = 0; index < context->references->length; ++index) {
+    const Reference *reference = &context->references->items[index];
+    bool matching_origin =
+        frame->origin == EXPANSION_ORIGIN_ARGUMENT
+            ? reference->macro_argument &&
+                  reference->macro_invocation_id == frame->source_invocation_id
+            : reference->macro_replacement;
+
+    if (matching_origin &&
+        reference_is_within_source_range(reference, frame->path,
+                                         range->start_line, range->start_column,
+                                         range->end_line, range->end_column) &&
+        reference->macro_source_identity > frame->last_source_identity) {
+      frame->last_source_identity = reference->macro_source_identity;
+    }
+  }
+}
+
+static bool macro_nested_invocation_range(WalkContext *context,
+                                          ExpansionFrame *source_frame,
+                                          const char *name,
+                                          MarkerRange *range) {
+  bool argument = source_frame->origin == EXPANSION_ORIGIN_ARGUMENT;
+  size_t source_index =
+      macro_source_reference_index(context, source_frame, name, argument);
+  const Reference *source;
+  SourceFile *file;
+  size_t name_end;
+  size_t frame_end;
+  size_t invocation_end;
+
+  if (source_index == SIZE_MAX) {
+    return false;
+  }
+  source = &context->references->items[source_index];
+  file = source_files_get(context->source_files, source->path);
+  if (file == NULL ||
+      !source_coordinate_offset(file, source->source_end_line,
+                                source->source_end_column, &name_end) ||
+      !source_coordinate_offset(file, source_frame->end_line,
+                                source_frame->end_column, &frame_end)) {
+    return false;
+  }
+  invocation_end = name_end;
+  (void)source_invocation_end(file, name_end, frame_end, &invocation_end);
+  *range = (MarkerRange){
+      .start_line = source->source_start_line,
+      .start_column = source->source_start_column,
+  };
+  if (!source_offset_coordinate(file, invocation_end, &range->end_line,
+                                &range->end_column)) {
+    return false;
+  }
+  macro_source_cursor_consume_range(context, source_frame, range);
+  return true;
+}
+
+static bool macro_parameter_index(const char *parameter_key, size_t *index) {
+  const char *separator = strrchr(parameter_key, '-');
+  char *end;
+  unsigned long parsed;
+
+  if (separator == NULL || separator[1] == '\0') {
+    return false;
+  }
+  errno = 0;
+  parsed = strtoul(separator + 1, &end, 10);
+  if (errno != 0 || *end != '\0' || parsed > SIZE_MAX) {
+    return false;
+  }
+  *index = (size_t)parsed;
+  return true;
+}
+
+static bool macro_invocation_argument_range(WalkContext *context,
+                                            const ExpansionFrame *invocation,
+                                            const char *parameter_key,
+                                            MarkerRange *range) {
+  SourceFile *file;
+  size_t requested;
+  size_t start;
+  size_t limit;
+  size_t cursor;
+  size_t argument_start;
+  size_t argument_index = 0;
+  unsigned depth = 0;
+
+  if (invocation->invocation_path == NULL ||
+      !macro_parameter_index(parameter_key, &requested)) {
+    return false;
+  }
+  file = source_files_get(context->source_files, invocation->invocation_path);
+  if (file == NULL ||
+      !source_coordinate_offset(file, invocation->invocation_start_line,
+                                invocation->invocation_start_column, &start) ||
+      !source_coordinate_offset(file, invocation->invocation_end_line,
+                                invocation->invocation_end_column, &limit)) {
+    return false;
+  }
+  cursor = start;
+  while (cursor < limit &&
+         identifier_continue((unsigned char)file->text[cursor])) {
+    ++cursor;
+  }
+  cursor = source_skip_trivia(file, cursor, limit);
+  if (cursor >= limit || file->text[cursor] != '(') {
+    return false;
+  }
+  argument_start = ++cursor;
+  while (cursor < limit) {
+    size_t next = source_skip_comment(file, cursor, limit);
+    if (next != cursor) {
+      cursor = next;
+      continue;
+    }
+    if (file->text[cursor] == '\'' || file->text[cursor] == '"') {
+      cursor = source_skip_quoted(file, cursor, limit);
+      continue;
+    }
+    if (file->text[cursor] == '(') {
+      ++depth;
+    } else if (file->text[cursor] == ')' && depth > 0) {
+      --depth;
+    } else if ((file->text[cursor] == ',' || file->text[cursor] == ')') &&
+               depth == 0) {
+      if (argument_index == requested) {
+        return source_offset_coordinate(file, argument_start,
+                                        &range->start_line,
+                                        &range->start_column) &&
+               source_offset_coordinate(file, cursor, &range->end_line,
+                                        &range->end_column);
+      }
+      if (file->text[cursor] == ')') {
+        return false;
+      }
+      ++argument_index;
+      argument_start = cursor + 1;
+    }
+    ++cursor;
+  }
+  return false;
+}
+
+static Reference *macro_semantic_reference(WalkContext *context,
+                                           ExpansionFrame *frame,
+                                           const char *name, bool argument) {
+  size_t source_index =
+      macro_source_reference_index(context, frame, name, argument);
+  Reference *source;
+  Reference *reference;
+  size_t source_identity;
+  size_t invocation_id;
+  unsigned source_start_line;
+  unsigned source_start_column;
+  unsigned source_end_line;
+  unsigned source_end_column;
+  bool macro_argument;
+  bool macro_replacement;
+
+  if (source_index == SIZE_MAX) {
+    return NULL;
+  }
+  source = &context->references->items[source_index];
+  if (!source->ordinary_identifier) {
+    return source;
+  }
+
+  source_identity = source->macro_source_identity;
+  invocation_id = source->macro_invocation_id;
+  source_start_line = source->source_start_line;
+  source_start_column = source->source_start_column;
+  source_end_line = source->source_end_line;
+  source_end_column = source->source_end_column;
+  macro_argument = source->macro_argument;
+  macro_replacement = source->macro_replacement;
+  reference = reference_list_add(context->references, source->name,
+                                 source->path, source->function, source->line,
+                                 false, false, context->translation_unit);
+  if (reference != NULL) {
+    reference->macro_source_identity = source_identity;
+    reference->macro_invocation_id = invocation_id;
+    reference->source_start_line = source_start_line;
+    reference->source_start_column = source_start_column;
+    reference->source_end_line = source_end_line;
+    reference->source_end_column = source_end_column;
+    reference->macro_argument = macro_argument;
+    reference->macro_replacement = macro_replacement;
+  }
+  return reference;
+}
+
+static void reference_apply_identifier_semantics(
+    Reference *reference, const char *function, bool declaration,
+    bool function_symbol, uint32_t position, LexicalScope scope,
+    SymbolLinkage linkage, bool replace_function) {
+  if (replace_function || function_symbol) {
+    free(reference->function);
+    reference->function =
+        function_symbol || function == NULL ? NULL : copy_string(function);
+  }
+  reference->declaration = declaration;
+  reference->function_symbol = function_symbol;
+  reference->position = position;
+  reference->scope = scope;
+  reference->ordinary_identifier = true;
+  reference->declares_function = function_symbol;
+  reference->linkage = linkage;
 }
 
 static void add_identifier(WalkContext *context, TSNode node,
                            const char *function, LexicalScope scope) {
   TSPoint point = ts_node_start_point(node);
-  const ExpansionFrame *argument_expansion =
+  ExpansionFrame *argument_expansion =
       active_expansion(context, EXPANSION_ORIGIN_ARGUMENT);
-  const ExpansionFrame *definition_expansion =
+  ExpansionFrame *definition_expansion =
       argument_expansion == NULL
           ? active_expansion(context, EXPANSION_ORIGIN_DEFINITION)
           : NULL;
-  const ExpansionFrame *expansion =
+  ExpansionFrame *expansion =
       argument_expansion != NULL ? argument_expansion : definition_expansion;
   TSNode owner;
   Reference *reference;
-  Reference *definition_template = NULL;
   const char *path;
-  const char *output_function;
   unsigned line;
   char *name;
   bool declaration;
@@ -876,43 +1291,30 @@ static void add_identifier(WalkContext *context, TSNode node,
                   ? SYMBOL_LINKAGE_INTERNAL
                   : SYMBOL_LINKAGE_EXTERNAL;
   }
-  output_function = function_symbol ? NULL : function;
   if (argument_expansion != NULL) {
     reference =
-        macro_argument_reference(context, argument_expansion, name, function);
+        macro_semantic_reference(context, argument_expansion, name, true);
   } else if (definition_expansion != NULL) {
-    reference = macro_definition_reference(context, definition_expansion, name,
-                                           &definition_template);
-    if (!function_symbol && definition_template != NULL) {
-      output_function = definition_template->function;
-    }
+    reference =
+        macro_semantic_reference(context, definition_expansion, name, false);
   } else {
     reference = NULL;
   }
   if (reference == NULL) {
-    reference = reference_list_add(context->references, name, path,
-                                   output_function, line, declaration,
-                                   function_symbol, context->translation_unit);
-  } else {
-    reference->declaration = declaration;
-    reference->function_symbol = function_symbol;
-    if (function_symbol) {
-      free(reference->function);
-      reference->function = NULL;
-    }
+    reference = reference_list_add(
+        context->references, name, path, function_symbol ? NULL : function,
+        line, declaration, function_symbol, context->translation_unit);
   }
   if (reference != NULL) {
-    reference->position = ts_node_start_byte(node);
-    reference->scope = scope;
-    reference->ordinary_identifier = true;
-    reference->declares_function = function_symbol;
-    reference->linkage = linkage;
+    if (argument_expansion != NULL) {
+      reference->macro_argument_id = argument_expansion->argument_id;
+    }
+    reference_apply_identifier_semantics(
+        reference, function, declaration, function_symbol,
+        ts_node_start_byte(node), scope, linkage, argument_expansion != NULL);
   }
   free(name);
 }
-
-static bool identifier_start(unsigned char character);
-static bool identifier_continue(unsigned char character);
 
 static bool parse_marker_number(const char **cursor, unsigned *number) {
   char *number_end;
@@ -1075,8 +1477,7 @@ static void macro_source_range_record(MacroSourceRanges *ranges,
   range->name = NULL;
 }
 
-static void expansion_frame_push(WalkContext *context,
-                                 const MacroSourceRange *source_range) {
+static ExpansionFrame *expansion_frame_append(WalkContext *context) {
   ExpansionFrame *frame;
 
   if (context->expansions.length == context->expansions.capacity) {
@@ -1089,19 +1490,143 @@ static void expansion_frame_push(WalkContext *context,
   }
   frame = &context->expansions.items[context->expansions.length++];
   *frame = (ExpansionFrame){0};
-  if (source_range != NULL && source_range->range.start_line != 0) {
-    frame->path = copy_string(source_range->path);
-    frame->start_line = source_range->range.start_line;
-    frame->end_line = source_range->range.end_line;
-    frame->origin = source_range->origin;
+  return frame;
+}
+
+static void expansion_frame_push_invocation(
+    WalkContext *context, const MacroSourceRange *definition,
+    size_t invocation_id, const char *invocation_path,
+    const MarkerRange *invocation_range) {
+  ExpansionFrame *frame = expansion_frame_append(context);
+
+  frame->introduces_invocation = true;
+  frame->invocation_id = invocation_id;
+  if (definition != NULL && definition->range.start_line != 0) {
+    frame->path = copy_string(definition->path);
+    frame->start_line = definition->range.start_line;
+    frame->start_column = definition->range.start_column;
+    frame->end_line = definition->range.end_line;
+    frame->end_column = definition->range.end_column;
+    frame->origin = definition->origin;
+  }
+  if (invocation_path != NULL && invocation_range != NULL) {
+    frame->invocation_path = copy_string(invocation_path);
+    frame->invocation_start_line = invocation_range->start_line;
+    frame->invocation_start_column = invocation_range->start_column;
+    frame->invocation_end_line = invocation_range->end_line;
+    frame->invocation_end_column = invocation_range->end_column;
   }
 }
 
+static void expansion_frame_push_argument(WalkContext *context,
+                                          const MacroArgument *argument) {
+  ExpansionFrame *frame = expansion_frame_append(context);
+
+  if (argument != NULL && argument->range.start_line != 0) {
+    frame->path = copy_string(argument->path);
+    frame->start_line = argument->range.start_line;
+    frame->start_column = argument->range.start_column;
+    frame->end_line = argument->range.end_line;
+    frame->end_column = argument->range.end_column;
+    frame->origin = argument->origin;
+    frame->invocation_id = argument->invocation_id;
+    frame->argument_id = argument->id;
+    frame->source_invocation_id = argument->source_invocation_id;
+    frame->source_argument_id = argument->source_argument_id;
+  }
+}
+
+static size_t active_macro_invocation(const WalkContext *context) {
+  size_t index;
+
+  for (index = context->expansions.length; index > 0; --index) {
+    const ExpansionFrame *frame = &context->expansions.items[index - 1];
+    if (frame->introduces_invocation) {
+      return frame->invocation_id;
+    }
+  }
+  return 0;
+}
+
+static bool macro_invocation_is_active(const WalkContext *context,
+                                       size_t invocation_id) {
+  size_t index;
+
+  for (index = context->expansions.length; index > 0; --index) {
+    const ExpansionFrame *frame = &context->expansions.items[index - 1];
+    if (frame->introduces_invocation && frame->invocation_id == invocation_id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static MacroArgument *macro_argument_add(WalkContext *context,
+                                         size_t invocation_id, const char *path,
+                                         MarkerRange *range,
+                                         ExpansionOrigin origin,
+                                         const ExpansionFrame *inherited) {
+  MacroArgument *argument;
+
+  if (context->macro_arguments.length == context->macro_arguments.capacity) {
+    context->macro_arguments.capacity =
+        context->macro_arguments.capacity == 0
+            ? 8
+            : context->macro_arguments.capacity * 2;
+    context->macro_arguments.items = checked_realloc(
+        context->macro_arguments.items, context->macro_arguments.capacity,
+        sizeof(*context->macro_arguments.items));
+  }
+  argument = &context->macro_arguments.items[context->macro_arguments.length++];
+  *argument = (MacroArgument){
+      .id = ++context->next_macro_argument_id,
+      .invocation_id = invocation_id,
+      .parameter_key = range->name,
+      .path = copy_string(path),
+      .range = *range,
+      .origin = origin,
+  };
+  argument->range.name = NULL;
+  range->name = NULL;
+  if (origin == EXPANSION_ORIGIN_ARGUMENT) {
+    if (inherited != NULL && inherited->source_invocation_id != 0) {
+      argument->source_invocation_id = inherited->source_invocation_id;
+      argument->source_argument_id = inherited->source_argument_id;
+    } else {
+      argument->source_invocation_id = invocation_id;
+      argument->source_argument_id = argument->id;
+    }
+  }
+  return argument;
+}
+
+static MacroArgument *macro_argument_find(WalkContext *context,
+                                          const char *parameter_key) {
+  size_t index;
+
+  for (index = context->macro_arguments.length; index > 0; --index) {
+    MacroArgument *argument = &context->macro_arguments.items[index - 1];
+    if (strcmp(argument->parameter_key, parameter_key) == 0 &&
+        macro_invocation_is_active(context, argument->invocation_id)) {
+      return argument;
+    }
+  }
+  return NULL;
+}
+
+static void expansion_frame_push_empty(WalkContext *context) {
+  (void)expansion_frame_append(context);
+}
+
 static void expansion_frame_pop(WalkContext *context) {
+  ExpansionFrame *frame;
+
   if (context->expansions.length == 0) {
     return;
   }
-  free(context->expansions.items[context->expansions.length - 1].path);
+  frame = &context->expansions.items[context->expansions.length - 1];
+  free(frame->path);
+  free(frame->invocation_path);
   --context->expansions.length;
 }
 
@@ -1115,13 +1640,24 @@ static void macro_source_ranges_delete(MacroSourceRanges *ranges) {
   free(ranges->items);
 }
 
+static void macro_arguments_delete(MacroArguments *arguments) {
+  size_t index;
+
+  for (index = 0; index < arguments->length; ++index) {
+    free(arguments->items[index].parameter_key);
+    free(arguments->items[index].path);
+  }
+  free(arguments->items);
+}
+
 static void macro_expansion_state_delete(WalkContext *context) {
   size_t index;
 
   for (index = 0; index < context->expansions.length; ++index) {
     free(context->expansions.items[index].path);
+    free(context->expansions.items[index].invocation_path);
   }
-  macro_source_ranges_delete(&context->macro_arguments);
+  macro_arguments_delete(&context->macro_arguments);
   macro_source_ranges_delete(&context->macro_definitions);
   free(context->expansions.items);
 }
@@ -1230,9 +1766,26 @@ static bool identifier_is_member(const SourceFile *file, size_t range_start,
          file->text[cursor - 2] == '-';
 }
 
+static void reference_set_macro_source(WalkContext *context,
+                                       Reference *reference,
+                                       const SourceFile *file,
+                                       size_t identifier_start,
+                                       size_t identifier_end, unsigned line,
+                                       size_t invocation_id) {
+  size_t line_offset = file->line_offsets[line - 1];
+
+  reference->macro_source_identity = ++context->next_macro_source_identity;
+  reference->macro_invocation_id = invocation_id;
+  reference->source_start_line = line;
+  reference->source_start_column =
+      (unsigned)(identifier_start - line_offset + 1);
+  reference->source_end_line = line;
+  reference->source_end_column = (unsigned)(identifier_end - line_offset + 1);
+}
+
 static void scan_source_range(WalkContext *context, const char *path,
                               const MarkerRange *range, const char *function,
-                              bool definition) {
+                              bool definition, size_t invocation_id) {
   SourceFile *file = source_files_get(context->source_files, path);
   size_t start;
   size_t end;
@@ -1363,10 +1916,15 @@ static void scan_source_range(WalkContext *context, const char *path,
         Reference *reference =
             reference_list_add(context->references, identifier, path, function,
                                line, false, false, context->translation_unit);
-        if (reference != NULL && !definition) {
-          reference->macro_argument = true;
-        } else if (reference != NULL) {
-          reference->macro_replacement = true;
+        if (reference != NULL) {
+          reference_set_macro_source(context, reference, file,
+                                     identifier_offset, cursor, line,
+                                     invocation_id);
+          if (!definition) {
+            reference->macro_argument = true;
+          } else {
+            reference->macro_replacement = true;
+          }
         }
       }
       free(identifier);
@@ -1408,7 +1966,7 @@ static void add_macro_marker(WalkContext *context, TSNode node,
   const char *path;
   char *text;
   MarkerRange range = {0};
-  MacroSourceRange *argument;
+  MacroArgument *argument;
   MacroSourceRange *definition;
   char *substitution_name = NULL;
   char *expansion_name = NULL;
@@ -1425,46 +1983,75 @@ static void add_macro_marker(WalkContext *context, TSNode node,
     expansion_frame_pop(context);
   } else if (parse_argument_marker(text, &range)) {
     const ExpansionFrame *inherited = NULL;
+    const ExpansionFrame *invocation =
+        context->expansions.length == 0
+            ? NULL
+            : &context->expansions.items[context->expansions.length - 1];
     ExpansionOrigin origin = EXPANSION_ORIGIN_ARGUMENT;
+    size_t invocation_id = active_macro_invocation(context);
     if (range.start_line == 0) {
       /* MCPP omits coordinates when an enclosing replacement supplies the
        * nested argument. Skip the nested macro frame and inherit its caller. */
       inherited = enclosing_macro_expansion(context);
       origin = inherited == NULL ? EXPANSION_ORIGIN_NONE : inherited->origin;
-      if (inherited != NULL) {
+      if (invocation != NULL && invocation->introduces_invocation &&
+          macro_invocation_argument_range(context, invocation, range.name,
+                                          &range)) {
+        path = invocation->invocation_path;
+      } else if (inherited != NULL) {
         range.start_line = inherited->start_line;
-        range.start_column = 1;
+        range.start_column = inherited->start_column;
         range.end_line = inherited->end_line;
-        range.end_column = 1;
+        range.end_column = inherited->end_column;
         path = inherited->path;
       }
     }
-    macro_source_range_record(&context->macro_arguments, path, &range, origin);
+    (void)macro_argument_add(context, invocation_id, path, &range, origin,
+                             inherited);
   } else if (strncmp(text, "/*<", 3) == 0) {
     if (parse_marker_range(text, '<', &range)) {
-      scan_source_range(context, path, &range, function, false);
+      ExpansionFrame *source_frame = current_macro_source_expansion(context);
+      size_t invocation_id = ++context->next_macro_invocation_id;
+      if (source_frame != NULL &&
+          source_range_is_within_expansion(path, &range, source_frame)) {
+        macro_source_cursor_consume_range(context, source_frame, &range);
+      } else {
+        scan_source_range(context, path, &range, function, false,
+                          invocation_id);
+      }
       definition =
           macro_source_range_find(&context->macro_definitions, range.name);
-      expansion_frame_push(context, definition);
+      expansion_frame_push_invocation(context, definition, invocation_id, path,
+                                      &range);
       free(range.name);
     } else if (parse_substitution_marker(text, &substitution_name)) {
-      argument =
-          macro_source_range_find(&context->macro_arguments, substitution_name);
-      expansion_frame_push(context, argument);
+      argument = macro_argument_find(context, substitution_name);
+      expansion_frame_push_argument(context, argument);
       free(substitution_name);
     } else if (parse_macro_expansion_marker(text, &expansion_name)) {
+      ExpansionFrame *source_frame = current_macro_source_expansion(context);
+      MarkerRange invocation_range = {0};
+      const char *invocation_path = NULL;
+      size_t invocation_id = ++context->next_macro_invocation_id;
       definition =
           macro_source_range_find(&context->macro_definitions, expansion_name);
-      expansion_frame_push(context, definition);
+      if (source_frame != NULL &&
+          macro_nested_invocation_range(context, source_frame, expansion_name,
+                                        &invocation_range)) {
+        invocation_path = source_frame->path;
+      }
+      expansion_frame_push_invocation(
+          context, definition, invocation_id, invocation_path,
+          invocation_path == NULL ? NULL : &invocation_range);
       free(expansion_name);
     } else {
-      expansion_frame_push(context, NULL);
+      expansion_frame_push_empty(context);
     }
   } else if (parse_marker_range(text, 'm', &range)) {
     reference_list_add(context->references, range.name, path, function,
                        range.start_line, true, false,
                        context->translation_unit);
-    scan_source_range(context, path, &range, function, true);
+    scan_source_range(context, path, &range, function, true, 0);
     macro_source_range_record(&context->macro_definitions, path, &range,
                               EXPANSION_ORIGIN_DEFINITION);
   } else if (strncmp(text, "/*if", 4) == 0 || strncmp(text, "/*elif", 6) == 0) {
