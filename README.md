@@ -60,7 +60,8 @@ Current migration controls and pilots include:
 - `procps`, the upstream `ps` process reporter backed by Kandelo's truthful
   cross-process procfs state.
 - `ctags`, Universal Ctags' maintained tag generator, `readtags` query client,
-  and optscript interpreter with complete C and C++ workflows.
+  and optscript interpreter with complete C and C++ workflows;
+- `texlive`, the pdfTeX engine plus its pinned macro, font, and format runtime.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node
