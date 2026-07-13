@@ -61,6 +61,8 @@ Current migration controls and pilots include:
   cross-process procfs state.
 - `ctags`, Universal Ctags' maintained tag generator, `readtags` query client,
   and optscript interpreter with complete C and C++ workflows.
+- `modeset`, the DRM/KMS EGL/GLES fluid simulation, with a Node PAGE_FLIP test
+  and a required Chromium rendered-canvas gate.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node
