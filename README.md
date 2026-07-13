@@ -85,6 +85,12 @@ undeclared, global, and mutable `opt` paths are never included. Formulae retain
 ownership of `PKG_CONFIG_PATH`, which selects and orders the target `.pc`
 directories the SDK may use.
 
+Formula tests that fork process trees declare the exact descendant count. The
+default contract requires every descendant to exit successfully; service tests
+with intentional signal-based teardown may instead declare the exact multiset
+of expected descendant statuses. Missing, extra, or unexpected descendants fail
+the test.
+
 ## Publication State
 
 Bottle metadata must be generated from the same trusted build that produces

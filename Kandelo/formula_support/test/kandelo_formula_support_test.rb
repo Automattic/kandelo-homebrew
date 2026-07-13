@@ -571,6 +571,41 @@ class KandeloFormulaSupportTest < Minitest::Test
     assert_includes error.message, "expected fork descendant count must be a nonnegative integer"
   end
 
+  def test_execution_passes_exact_expected_fork_descendant_statuses
+    harness = Harness.new
+    harness.kandelo_run_wasm(
+      "program.wasm", [], expected_fork_descendant_statuses: [0, 143]
+    )
+
+    assert_includes harness.command, "run-network-wasm.ts"
+    assert_includes harness.command, "KANDELO_FORMULA_EXPECTED_FORK_DESCENDANT_STATUSES_JSON=\\[0,143\\]"
+    refute_includes harness.command, "KANDELO_FORMULA_EXPECTED_FORK_DESCENDANTS="
+  end
+
+  def test_execution_rejects_invalid_expected_fork_descendant_statuses
+    [[], [0, -1], [0, 256], [0, 1.5], "0,143"].each do |statuses|
+      error = assert_raises(RuntimeError) do
+        Harness.new.kandelo_run_wasm(
+          "program.wasm", [], expected_fork_descendant_statuses: statuses
+        )
+      end
+
+      assert_includes error.message, "expected fork descendant statuses must be a nonempty array of byte integers"
+    end
+  end
+
+  def test_execution_rejects_combined_fork_descendant_count_and_statuses
+    error = assert_raises(RuntimeError) do
+      Harness.new.kandelo_run_wasm(
+        "program.wasm", [],
+        expected_fork_descendants:         2,
+        expected_fork_descendant_statuses: [0, 143]
+      )
+    end
+
+    assert_includes error.message, "expected fork descendant count and statuses cannot both be set"
+  end
+
   def test_default_execution_keeps_standard_runner_and_removes_stale_host_dist
     Dir.mktmpdir("kandelo-formula-support") do |dir|
       root = Pathname(dir)/"kandelo root"

@@ -441,18 +441,30 @@ module KandeloFormulaSupport
   # `exec_programs:` stages explicit guest exec targets, `guest_files:` stages
   # ordinary files in the guest VFS, `writable_host_directories:` exposes
   # explicit host directories as writable guest mounts for output validation,
-  # `expected_fork_descendants:` keeps the host alive until at least that many
-  # fork descendants have exited successfully, and `expected_status:`
-  # permits tests for specified nonzero results such as a grep no-match status.
+  # `expected_fork_descendants:` requires exactly that many fork descendants to
+  # exit successfully. `expected_fork_descendant_statuses:` instead requires an
+  # exact multiset of descendant exit statuses for service teardown paths where
+  # a signal exit is intentional. `expected_status:` permits tests for specified
+  # nonzero results such as a grep no-match status.
   def kandelo_run_wasm(
     bin_path, argv, env: {}, stdin: nil, merge_stderr: false, network: false,
     preserve_argv0: false, argv0: nil, exec_programs: {}, guest_files: {},
-    writable_host_directories: {}, expected_fork_descendants: 0, expected_status: 0
+    writable_host_directories: {}, expected_fork_descendants: 0,
+    expected_fork_descendant_statuses: nil, expected_status: 0
   )
     root = kandelo_require_root!
     kandelo_validate_guest_argv0!(argv0)
     valid_descendant_count = expected_fork_descendants.is_a?(Integer) && expected_fork_descendants >= 0
     odie "expected fork descendant count must be a nonnegative integer" unless valid_descendant_count
+    unless expected_fork_descendant_statuses.nil?
+      valid_statuses = expected_fork_descendant_statuses.is_a?(Array) &&
+                       expected_fork_descendant_statuses.any? &&
+                       expected_fork_descendant_statuses.all? do |status|
+                         status.is_a?(Integer) && status.between?(0, 255)
+                       end
+      odie "expected fork descendant statuses must be a nonempty array of byte integers" unless valid_statuses
+      odie "expected fork descendant count and statuses cannot both be set" if expected_fork_descendants.positive?
+    end
     if (node = ENV.fetch("HOMEBREW_KANDELO_NODE", nil)).to_s != ""
       ENV.prepend_path "PATH", File.dirname(node)
     end
@@ -473,7 +485,7 @@ module KandeloFormulaSupport
     command << Shellwords.escape(root) << " && "
     isolated_runner = network || preserve_argv0 || !argv0.nil? || exec_programs.any? ||
                       guest_files.any? || writable_host_directories.any? ||
-                      expected_fork_descendants.positive?
+                      expected_fork_descendants.positive? || !expected_fork_descendant_statuses.nil?
     if isolated_runner
       guest_env = JSON.generate(env.transform_values(&:to_s))
       guest_exec_programs = JSON.generate(exec_programs.transform_values(&:to_s))
@@ -487,6 +499,10 @@ module KandeloFormulaSupport
       command << "KANDELO_FORMULA_ENABLE_NETWORK=#{network ? 1 : 0} "
       if expected_fork_descendants.positive?
         command << "KANDELO_FORMULA_EXPECTED_FORK_DESCENDANTS=#{expected_fork_descendants} "
+      end
+      unless expected_fork_descendant_statuses.nil?
+        statuses = JSON.generate(expected_fork_descendant_statuses)
+        command << "KANDELO_FORMULA_EXPECTED_FORK_DESCENDANT_STATUSES_JSON=#{Shellwords.escape(statuses)} "
       end
     else
       env.each { |key, value| command << "#{key}=#{Shellwords.escape(value.to_s)} " }
