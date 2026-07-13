@@ -135,6 +135,86 @@ class KandeloFormulaSupportTest < Minitest::Test
     assert_includes error.message, "is not installed at /missing/Cellar/openssl/3.3.2_2"
   end
 
+  def test_sdk_activation_declares_exact_direct_and_transitive_target_pkg_config_dirs
+    original = ENV.to_hash
+    Dir.mktmpdir("kandelo-pkg-config-closure") do |dir|
+      harness = Harness.new
+      harness.root_path = "/tmp/kandelo-root"
+      zlib_name = "automattic/kandelo-homebrew/zlib"
+      openssl_name = "automattic/kandelo-homebrew/openssl"
+      zlib_rack = Pathname(dir)/"Cellar/zlib"
+      openssl_rack = Pathname(dir)/"Cellar/openssl"
+      zlib_keg = zlib_rack/"1.3.1_2"
+      openssl_keg = openssl_rack/"3.3.2_2"
+      (zlib_keg/"lib/pkgconfig").mkpath
+      (openssl_keg/"share/pkgconfig").mkpath
+      harness.dependency_formulae = {
+        zlib_name    => InstalledFormula.new(rack: zlib_rack, pkg_version: "1.3.1_2"),
+        openssl_name => InstalledFormula.new(rack: openssl_rack, pkg_version: "3.3.2_2"),
+      }
+      # Homebrew returns the declared runtime closure; these entries model a
+      # direct target dep, its transitive target dep, a native dep, and a
+      # duplicate closure entry.
+      zlib_dependency = DependencyFormula.new(
+        full_name: zlib_name, opt_bin: Pathname("/prefix/opt/zlib/bin"),
+        opt_sbin: Pathname("/prefix/opt/zlib/sbin"), opt_libexec: Pathname("/prefix/opt/zlib/libexec")
+      )
+      openssl_dependency = DependencyFormula.new(
+        full_name: openssl_name, opt_bin: Pathname("/prefix/opt/openssl/bin"),
+        opt_sbin: Pathname("/prefix/opt/openssl/sbin"), opt_libexec: Pathname("/prefix/opt/openssl/libexec")
+      )
+      native_dependency = DependencyFormula.new(
+        full_name: "pkgconf", opt_bin: Pathname("/prefix/opt/pkgconf/bin"),
+        opt_sbin: Pathname("/prefix/opt/pkgconf/sbin"), opt_libexec: Pathname("/prefix/opt/pkgconf/libexec")
+      )
+      harness.runtime_formulae = [zlib_dependency, native_dependency, openssl_dependency, zlib_dependency]
+      ENV["PATH"] = "/usr/bin"
+      ENV["PKG_CONFIG_PATH"] = "/caller/selection/lib/pkgconfig"
+      ENV["WASM_POSIX_DEP_PKG_CONFIG_PATH"] = "/ambient/native/lib/pkgconfig"
+
+      harness.kandelo_activate_sdk!
+
+      expected = [openssl_keg/"share/pkgconfig", zlib_keg/"lib/pkgconfig"].map(&:to_s).sort
+      assert_equal expected.join(File::PATH_SEPARATOR), ENV.fetch("WASM_POSIX_DEP_PKG_CONFIG_PATH")
+      assert_equal "/caller/selection/lib/pkgconfig", ENV.fetch("PKG_CONFIG_PATH")
+      refute_includes ENV.fetch("WASM_POSIX_DEP_PKG_CONFIG_PATH"), "/prefix/opt/"
+      refute_includes ENV.fetch("WASM_POSIX_DEP_PKG_CONFIG_PATH"), "/prefix/opt/pkgconf"
+    end
+  ensure
+    ENV.replace(original) if original
+  end
+
+  def test_pkg_config_declaration_skips_missing_native_and_undeclared_dirs
+    original = ENV.to_hash
+    Dir.mktmpdir("kandelo-pkg-config-missing") do |dir|
+      harness = Harness.new
+      declared_name = "automattic/kandelo-homebrew/ncurses"
+      undeclared_name = "automattic/kandelo-homebrew/openssl"
+      declared_rack = Pathname(dir)/"Cellar/ncurses"
+      declared_keg = declared_rack/"6.5_2"
+      undeclared_rack = Pathname(dir)/"Cellar/openssl"
+      declared_keg.mkpath
+      (undeclared_rack/"3.3.2_2/lib/pkgconfig").mkpath
+      harness.dependency_formulae = {
+        declared_name   => InstalledFormula.new(rack: declared_rack, pkg_version: "6.5_2"),
+        undeclared_name => InstalledFormula.new(rack: undeclared_rack, pkg_version: "3.3.2_2"),
+      }
+      harness.runtime_formulae = [
+        DependencyFormula.new(full_name: declared_name),
+        DependencyFormula.new(full_name: "pkgconf"),
+      ]
+      ENV["PKG_CONFIG_PATH"] = "/caller/selection/lib/pkgconfig"
+      ENV["WASM_POSIX_DEP_PKG_CONFIG_PATH"] = "/ambient/native/lib/pkgconfig"
+
+      harness.kandelo_export_target_pkg_config_path!
+
+      assert_equal "", ENV.fetch("WASM_POSIX_DEP_PKG_CONFIG_PATH")
+      assert_equal "/caller/selection/lib/pkgconfig", ENV.fetch("PKG_CONFIG_PATH")
+    end
+  ensure
+    ENV.replace(original) if original
+  end
+
   def test_fork_instrumentation_replaces_the_linked_program
     Dir.mktmpdir("kandelo-formula-support") do |dir|
       harness = Harness.new
@@ -422,6 +502,42 @@ class KandeloFormulaSupportTest < Minitest::Test
     refute_includes build_environment.fetch("PATH").split(File::PATH_SEPARATOR), "/prefix/bin"
     cmake_search_variables.each { |key| refute build_environment.key?(key) }
     assert_equal scoped, ENV.to_hash
+  ensure
+    ENV.replace(original) if original
+  end
+
+  def test_wasm_build_scopes_target_pkg_config_declaration_and_restores_environment
+    original = ENV.to_hash
+    Dir.mktmpdir("kandelo-pkg-config-scope") do |dir|
+      harness = Harness.new
+      harness.homebrew_prefix_path = Pathname("/prefix")
+      harness.root_path = "/tmp/kandelo-root"
+      target = "automattic/kandelo-homebrew/zlib"
+      rack = Pathname(dir)/"Cellar/zlib"
+      keg = rack/"1.3.1_2"
+      (keg/"lib/pkgconfig").mkpath
+      harness.dependency_formulae = {
+        target => InstalledFormula.new(rack:, pkg_version: "1.3.1_2"),
+      }
+      harness.runtime_formulae = [
+        DependencyFormula.new(
+          full_name: target, opt_bin: Pathname("/prefix/opt/zlib/bin"),
+          opt_sbin: Pathname("/prefix/opt/zlib/sbin"), opt_libexec: Pathname("/prefix/opt/zlib/libexec")
+        ),
+      ]
+      ENV["PATH"] = ["/prefix/bin", "/usr/bin"].join(File::PATH_SEPARATOR)
+      ENV["PKG_CONFIG_PATH"] = "/caller/selection/lib/pkgconfig"
+      ENV["WASM_POSIX_DEP_PKG_CONFIG_PATH"] = "/ambient/native/lib/pkgconfig"
+      scoped = ENV.to_hash
+
+      build_environment = nil
+      harness.kandelo_wasm_build { build_environment = ENV.to_hash }
+
+      assert_equal (keg/"lib/pkgconfig").to_s,
+                   build_environment.fetch("WASM_POSIX_DEP_PKG_CONFIG_PATH")
+      assert_equal "/caller/selection/lib/pkgconfig", build_environment.fetch("PKG_CONFIG_PATH")
+      assert_equal scoped, ENV.to_hash
+    end
   ensure
     ENV.replace(original) if original
   end
