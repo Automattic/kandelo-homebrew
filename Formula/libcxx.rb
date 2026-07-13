@@ -9,6 +9,7 @@ class Libcxx < Formula
   url "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.7/llvm-project-21.1.7.src.tar.xz"
   sha256 "e5b65fd79c95c343bb584127114cb2d252306c1ada1e057899b6aacdd445899e"
   license "Apache-2.0" => { with: "LLVM-exception" }
+  revision 1
 
   depends_on "cmake" => :build
   depends_on "wabt" => :test
