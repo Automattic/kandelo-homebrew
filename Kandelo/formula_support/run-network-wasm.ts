@@ -2,6 +2,11 @@ import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import {
+  type ExpectedForkDescendants,
+  parseExpectedForkDescendants,
+  validateForkDescendantStatuses,
+} from "./fork-descendant-statuses.ts";
 import { rootfsSizeForStagedBytes, validateGuestPath } from "./rootfs-size.ts";
 
 const O_WRONLY = 0x0001;
@@ -31,28 +36,26 @@ interface ProcessEvent {
 }
 
 async function waitForForkDescendants(
-  expectedCount: number,
+  expected: ExpectedForkDescendants,
   activePids: Set<number>,
   descendantPids: Set<number>,
   descendantExitStatuses: Map<number, number>,
   deadline: number,
 ): Promise<void> {
-  while (descendantPids.size < expectedCount || activePids.size > 0) {
+  while (activePids.size > 0) {
     if (Date.now() >= deadline) {
       throw new Error(
-        `timed out waiting for ${expectedCount} fork descendant(s); ` +
+        `timed out waiting for ${expected.count} fork descendant(s); ` +
           `observed ${descendantPids.size}, active ${[...activePids].join(",") || "none"}`,
       );
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-
-  const failures = [...descendantExitStatuses]
-    .filter(([, status]) => status !== 0)
-    .map(([pid, status]) => `${pid}:${status}`);
-  if (failures.length > 0) {
-    throw new Error(`descendant process failed: ${failures.join(", ")}`);
-  }
+  validateForkDescendantStatuses(
+    expected,
+    descendantPids,
+    descendantExitStatuses,
+  );
 }
 
 function writeGuestFile(
@@ -109,18 +112,10 @@ async function main(): Promise<void> {
   const writableHostDirectories = JSON.parse(
     process.env.KANDELO_FORMULA_WRITABLE_HOST_DIRS_JSON ?? "{}",
   ) as Record<string, string>;
-  const expectedForkDescendantsValue =
-    process.env.KANDELO_FORMULA_EXPECTED_FORK_DESCENDANTS ?? "0";
-  const expectedForkDescendants = Number(expectedForkDescendantsValue);
-  if (
-    !/^(0|[1-9]\d*)$/.test(expectedForkDescendantsValue) ||
-    !Number.isSafeInteger(expectedForkDescendants) ||
-    expectedForkDescendants < 0
-  ) {
-    throw new Error(
-      `invalid expected fork descendant count: ${expectedForkDescendantsValue}`,
-    );
-  }
+  const expectedForkDescendants = parseExpectedForkDescendants(
+    process.env.KANDELO_FORMULA_EXPECTED_FORK_DESCENDANTS,
+    process.env.KANDELO_FORMULA_EXPECTED_FORK_DESCENDANT_STATUSES_JSON,
+  );
   const configuredArgv0 = process.env.KANDELO_FORMULA_ARGV0;
   const argv0 = configuredArgv0 ?? programPath;
   const guestPaths = [...Object.keys(guestFiles), ...Object.keys(execPrograms)];
@@ -284,7 +279,7 @@ async function main(): Promise<void> {
     try {
       const status = await Promise.race([exit, timeout]);
       process.exitCode = status;
-      if (status === 0 && expectedForkDescendants > 0) {
+      if (status === 0 && expectedForkDescendants.count > 0) {
         await Promise.race([
           waitForForkDescendants(
             expectedForkDescendants,
