@@ -59,8 +59,8 @@ Current migration controls and pilots include:
   Kandelo's musl `catopen` and `catgets` implementation.
 - `ctags`, Universal Ctags' maintained tag generator, `readtags` query client,
   and optscript interpreter with complete C and C++ workflows.
-- `cxref`, the upstream C cross-reference and documentation generator with its
-  bundled preprocessor exercised through Kandelo fork and exec.
+- `cxref`, a POSIX C-language cross-reference generator using in-process MCPP
+  preprocessing and Tree-sitter C analysis on both Node and browser hosts.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node
