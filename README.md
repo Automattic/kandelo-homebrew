@@ -61,6 +61,10 @@ Current migration controls and pilots include:
   cross-process procfs state.
 - `ctags`, Universal Ctags' maintained tag generator, `readtags` query client,
   and optscript interpreter with complete C and C++ workflows.
+- `util-linux`, the upstream `cal`, `ipcrm`, and `renice` utilities; `ipcs`
+  remains excluded until Kandelo exposes truthful System V IPC enumeration,
+  and `logger` remains excluded until Kandelo supports cross-process AF_UNIX or
+  loopback UDP delivery to a syslog receiver.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node
