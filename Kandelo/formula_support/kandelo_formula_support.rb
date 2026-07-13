@@ -114,7 +114,9 @@ module KandeloFormulaSupport
       kandelo_prepend_path! llvm_bin
     end
 
-    kandelo_isolate_host_build_path!
+    target_dependencies = kandelo_target_runtime_dependencies
+    kandelo_isolate_host_build_path!(target_dependencies)
+    kandelo_export_target_pkg_config_path!(target_dependencies)
     root
   end
 
@@ -206,6 +208,12 @@ module KandeloFormulaSupport
     value.to_s.empty? ? nil : Pathname(value)
   end
 
+  def kandelo_target_runtime_dependencies
+    runtime_formula_dependencies(read_from_tab: false, undeclared: false).select do |dependency|
+      dependency.full_name.start_with?(KANDELO_TAP_FORMULA_PREFIX)
+    end
+  end
+
   # Homebrew assumes every dependency executable runs on the build host and
   # adds every opt_bin to PATH. Its global bin directories can also contain
   # linked executables from unrelated Kandelo Formulae. Those executables are
@@ -214,11 +222,7 @@ module KandeloFormulaSupport
   # prefix and declared target executable directories; Formulae still address
   # target headers and libraries through their explicit formula_opt_prefix
   # paths.
-  def kandelo_isolate_host_build_path!
-    runtime_dependencies = runtime_formula_dependencies(read_from_tab: false, undeclared: false)
-    target_dependencies = runtime_dependencies.select do |dependency|
-      dependency.full_name.start_with?(KANDELO_TAP_FORMULA_PREFIX)
-    end
+  def kandelo_isolate_host_build_path!(target_dependencies = kandelo_target_runtime_dependencies)
     target_paths = []
     if (homebrew_prefix = kandelo_homebrew_prefix)
       target_paths.push(homebrew_prefix/"bin", homebrew_prefix/"sbin")
@@ -234,6 +238,23 @@ module KandeloFormulaSupport
     ENV["PATH"] = entries.reject do |entry|
       !entry.empty? && target_paths.include?(File.expand_path(entry))
     end.join(File::PATH_SEPARATOR)
+  end
+
+  # Declare the exact pkg-config directories owned by the installed Kandelo
+  # runtime dependency closure. The SDK intersects this authorization set with
+  # PKG_CONFIG_PATH, which remains Formula-owned search selection. Resolve full
+  # tap identities through the versioned Cellar keg and replace any ambient
+  # declaration so native, undeclared, global, or mutable opt paths cannot leak.
+  def kandelo_export_target_pkg_config_path!(target_dependencies = kandelo_target_runtime_dependencies)
+    formula_names = target_dependencies.map(&:full_name).uniq.sort
+    pkg_config_paths = formula_names.flat_map do |formula_name|
+      keg = kandelo_formula_prefix(formula_name)
+      [keg/"lib/pkgconfig", keg/"share/pkgconfig"]
+    end
+    existing_paths = pkg_config_paths.select(&:directory?)
+    normalized_paths = existing_paths.map { |path| File.expand_path(path.to_s) }.uniq.sort
+
+    ENV["WASM_POSIX_DEP_PKG_CONFIG_PATH"] = normalized_paths.join(File::PATH_SEPARATOR)
   end
 
   # Establish a clean cross-build environment for an idiomatic Formula

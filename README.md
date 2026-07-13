@@ -77,6 +77,14 @@ opt paths for compiled runtime identities and explicit test staging. Native
 Homebrew build dependencies remain available through their versioned `opt/bin`
 paths.
 
+SDK activation also exports `WASM_POSIX_DEP_PKG_CONFIG_PATH` from the existing
+`lib/pkgconfig` and `share/pkgconfig` directories in the exact versioned kegs
+of the Formula's declared Kandelo runtime dependency closure. The declaration
+is rebuilt for each activation and replaces any ambient value; native,
+undeclared, global, and mutable `opt` paths are never included. Formulae retain
+ownership of `PKG_CONFIG_PATH`, which selects and orders the target `.pc`
+directories the SDK may use.
+
 ## Publication State
 
 Bottle metadata must be generated from the same trusted build that produces
