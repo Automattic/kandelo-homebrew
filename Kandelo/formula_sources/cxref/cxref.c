@@ -26,13 +26,32 @@
 
 extern const TSLanguage *tree_sitter_c(void);
 
+typedef enum {
+  SYMBOL_LINKAGE_NONE,
+  SYMBOL_LINKAGE_INTERNAL,
+  SYMBOL_LINKAGE_EXTERNAL,
+} SymbolLinkage;
+
+typedef struct {
+  uint32_t start_byte;
+  uint32_t end_byte;
+  unsigned depth;
+} LexicalScope;
+
 typedef struct {
   char *name;
   char *path;
   char *function;
   unsigned line;
+  uint32_t position;
+  LexicalScope scope;
+  size_t translation_unit;
+  size_t symbol_identity;
   bool declaration;
+  bool ordinary_identifier;
+  bool declares_function;
   bool function_symbol;
+  SymbolLinkage linkage;
 } Reference;
 
 typedef struct {
@@ -92,6 +111,7 @@ typedef struct {
   const SourceMap *map;
   ReferenceList *references;
   SourceFiles *source_files;
+  size_t translation_unit;
   unsigned expansion_depth;
   bool condition_markers;
   int status;
@@ -225,12 +245,13 @@ static void preprocessor_options_delete(PreprocessorOptions *options) {
   free(options->items);
 }
 
-static void reference_list_add(ReferenceList *list, const char *name,
-                               const char *path, const char *function,
-                               unsigned line, bool declaration,
-                               bool function_symbol) {
+static Reference *reference_list_add(ReferenceList *list, const char *name,
+                                     const char *path, const char *function,
+                                     unsigned line, bool declaration,
+                                     bool function_symbol,
+                                     size_t translation_unit) {
   if (name[0] == '\0' || path == NULL || path[0] == '\0' || line == 0) {
-    return;
+    return NULL;
   }
   if (list->length == list->capacity) {
     list->capacity = list->capacity == 0 ? 64 : list->capacity * 2;
@@ -242,9 +263,11 @@ static void reference_list_add(ReferenceList *list, const char *name,
       .path = copy_string(path),
       .function = function == NULL ? NULL : copy_string(function),
       .line = line,
+      .translation_unit = translation_unit,
       .declaration = declaration,
       .function_symbol = function_symbol,
   };
+  return &list->items[list->length - 1];
 }
 
 static void reference_list_append(ReferenceList *destination,
@@ -640,12 +663,56 @@ static bool identifier_is_function(TSNode node) {
   }
 }
 
+static TSNode identifier_declaration_owner(TSNode node) {
+  TSNode current = node;
+
+  while (!ts_node_is_null(current)) {
+    const char *type = ts_node_type(current);
+    if (strcmp(type, "declaration") == 0 ||
+        strcmp(type, "function_definition") == 0 ||
+        strcmp(type, "parameter_declaration") == 0) {
+      return current;
+    }
+    current = ts_node_parent(current);
+  }
+  return (TSNode){0};
+}
+
+static bool node_has_storage_class(TSNode node, const char *source,
+                                   const char *storage_class) {
+  uint32_t index;
+
+  for (index = 0; index < ts_node_named_child_count(node); ++index) {
+    TSNode child = ts_node_named_child(node, index);
+    if (strcmp(ts_node_type(child), "storage_class_specifier") == 0) {
+      char *text = node_text(child, source);
+      bool matches = strcmp(text, storage_class) == 0;
+      free(text);
+      if (matches) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+static LexicalScope lexical_scope_for_node(TSNode node, unsigned depth) {
+  return (LexicalScope){
+      .start_byte = ts_node_start_byte(node),
+      .end_byte = ts_node_end_byte(node),
+      .depth = depth,
+  };
+}
+
 static void add_identifier(WalkContext *context, TSNode node,
-                           const char *function) {
+                           const char *function, LexicalScope scope) {
   TSPoint point = ts_node_start_point(node);
+  TSNode owner;
+  Reference *reference;
   char *name;
   bool declaration;
   bool function_symbol;
+  SymbolLinkage linkage = SYMBOL_LINKAGE_NONE;
 
   if (context->expansion_depth > 0 || point.row >= context->map->count ||
       context->map->paths[point.row] == NULL) {
@@ -654,10 +721,28 @@ static void add_identifier(WalkContext *context, TSNode node,
   name = node_text(node, context->source);
   declaration = identifier_is_declaration(node);
   function_symbol = identifier_is_function(node);
-  reference_list_add(context->references, name, context->map->paths[point.row],
-                     function_symbol ? NULL : function,
-                     context->map->lines[point.row], declaration,
-                     function_symbol);
+  owner = identifier_declaration_owner(node);
+  if (function_symbol && !ts_node_is_null(owner) &&
+      node_has_storage_class(owner, context->source, "typedef")) {
+    function_symbol = false;
+  }
+  if (function_symbol) {
+    linkage = !ts_node_is_null(owner) &&
+                      node_has_storage_class(owner, context->source, "static")
+                  ? SYMBOL_LINKAGE_INTERNAL
+                  : SYMBOL_LINKAGE_EXTERNAL;
+  }
+  reference = reference_list_add(
+      context->references, name, context->map->paths[point.row],
+      function_symbol ? NULL : function, context->map->lines[point.row],
+      declaration, function_symbol, context->translation_unit);
+  if (reference != NULL) {
+    reference->position = ts_node_start_byte(node);
+    reference->scope = scope;
+    reference->ordinary_identifier = true;
+    reference->declares_function = function_symbol;
+    reference->linkage = linkage;
+  }
   free(name);
 }
 
@@ -925,7 +1010,7 @@ static void scan_source_range(WalkContext *context, const char *path,
         signature_pending = definition;
         if (!definition) {
           reference_list_add(context->references, identifier, path, function,
-                             line, false, false);
+                             line, false, false, context->translation_unit);
         }
       } else if (in_parameters) {
         if (!string_array_contains(parameters, parameter_count, identifier)) {
@@ -942,7 +1027,7 @@ static void scan_source_range(WalkContext *context, const char *path,
                                         identifier) &&
                  !identifier_is_member(file, start, identifier_offset)) {
         reference_list_add(context->references, identifier, path, function,
-                           line, false, false);
+                           line, false, false, context->translation_unit);
       }
       free(identifier);
       continue;
@@ -1004,7 +1089,8 @@ static void add_macro_marker(WalkContext *context, TSNode node,
     ++context->expansion_depth;
   } else if (parse_marker_range(text, 'm', &range)) {
     reference_list_add(context->references, range.name, path, function,
-                       range.start_line, true, false);
+                       range.start_line, true, false,
+                       context->translation_unit);
     scan_source_range(context, path, &range, function, true);
     free(range.name);
   } else if (strncmp(text, "/*if", 4) == 0 || strncmp(text, "/*elif", 6) == 0) {
@@ -1014,39 +1100,106 @@ static void add_macro_marker(WalkContext *context, TSNode node,
   } else if (context->condition_markers &&
              parse_bare_macro_marker(text, &bare_name)) {
     reference_list_add(context->references, bare_name, path, function,
-                       context->map->lines[point.row], false, false);
+                       context->map->lines[point.row], false, false,
+                       context->translation_unit);
     free(bare_name);
   }
   free(text);
 }
 
-static void walk_tree(WalkContext *context, TSNode node, const char *function) {
+static TSNode function_declarator_for_identifier(TSNode identifier) {
+  TSNode child = identifier;
+  bool pointer_declarator_seen = false;
+
+  while (true) {
+    TSNode parent = ts_node_parent(child);
+    const char *type;
+    const char *field;
+    if (ts_node_is_null(parent)) {
+      return (TSNode){0};
+    }
+    type = ts_node_type(parent);
+    field = field_for_child(parent, child);
+    if (strcmp(type, "function_declarator") == 0 && field != NULL &&
+        strcmp(field, "declarator") == 0 && !pointer_declarator_seen) {
+      return parent;
+    }
+    if (strcmp(type, "pointer_declarator") == 0 && field != NULL &&
+        strcmp(field, "declarator") == 0) {
+      pointer_declarator_seen = true;
+    }
+    child = parent;
+  }
+}
+
+static void walk_tree(WalkContext *context, TSNode node, const char *function,
+                      LexicalScope scope, TSNode definition_parameter_owner,
+                      const LexicalScope *definition_parameter_scope) {
   const char *type = ts_node_type(node);
   char *owned_function = NULL;
   uint32_t index;
 
   if (strcmp(type, "function_definition") == 0) {
     TSNode declarator = ts_node_child_by_field_name(node, "declarator", 10);
+    TSNode body = ts_node_child_by_field_name(node, "body", 4);
     TSNode identifier = first_identifier(declarator);
+    TSNode parameter_owner = (TSNode){0};
+    LexicalScope function_scope = lexical_scope_for_node(node, scope.depth + 1);
     if (!ts_node_is_null(identifier)) {
       owned_function = node_text(identifier, context->source);
       function = owned_function;
+      parameter_owner = function_declarator_for_identifier(identifier);
     }
+    for (index = 0; index < ts_node_named_child_count(node); ++index) {
+      TSNode child = ts_node_named_child(node, index);
+      if (!ts_node_is_null(body) && ts_node_eq(child, body)) {
+        walk_tree(context, child, function, function_scope, (TSNode){0}, NULL);
+      } else {
+        walk_tree(context, child, function, scope, parameter_owner,
+                  &function_scope);
+      }
+    }
+    free(owned_function);
+    return;
+  }
+  if (strcmp(type, "function_declarator") == 0) {
+    bool definition_parameters = !ts_node_is_null(definition_parameter_owner) &&
+                                 ts_node_eq(node, definition_parameter_owner) &&
+                                 definition_parameter_scope != NULL;
+    for (index = 0; index < ts_node_named_child_count(node); ++index) {
+      TSNode child = ts_node_named_child(node, index);
+      const char *field = field_for_child(node, child);
+      if (field != NULL && strcmp(field, "parameters") == 0) {
+        LexicalScope parameter_scope =
+            definition_parameters
+                ? *definition_parameter_scope
+                : lexical_scope_for_node(child, scope.depth + 1);
+        walk_tree(context, child, function, parameter_scope, (TSNode){0}, NULL);
+      } else {
+        walk_tree(context, child, function, scope, definition_parameter_owner,
+                  definition_parameter_scope);
+      }
+    }
+    return;
+  }
+  if (strcmp(type, "compound_statement") == 0 ||
+      strcmp(type, "for_statement") == 0) {
+    scope = lexical_scope_for_node(node, scope.depth + 1);
   }
   if (strcmp(type, "identifier") == 0) {
-    add_identifier(context, node, function);
+    add_identifier(context, node, function, scope);
   } else if (strcmp(type, "comment") == 0) {
     add_macro_marker(context, node, function);
   }
   for (index = 0; index < ts_node_named_child_count(node); ++index) {
-    walk_tree(context, ts_node_named_child(node, index), function);
+    walk_tree(context, ts_node_named_child(node, index), function, scope,
+              definition_parameter_owner, definition_parameter_scope);
   }
-  free(owned_function);
 }
 
 static int analyze_file(const char *path, const char *encoding_option,
                         const PreprocessorOptions *options,
-                        ReferenceList *references) {
+                        ReferenceList *references, size_t translation_unit) {
   char **arguments;
   char *absolute_path;
   char *preprocessed;
@@ -1128,8 +1281,10 @@ static int analyze_file(const char *path, const char *encoding_option,
       .map = &map,
       .references = references,
       .source_files = &source_files,
+      .translation_unit = translation_unit,
   };
-  walk_tree(&context, root, NULL);
+  walk_tree(&context, root, NULL, lexical_scope_for_node(root, 0), (TSNode){0},
+            NULL);
   if (ts_node_has_error(root)) {
     fprintf(stderr, "cxref: %s contains C syntax errors\n", path);
     status = 1;
@@ -1193,40 +1348,105 @@ static bool reference_equal(const Reference *left, const Reference *right) {
          left->line == right->line && left->declaration == right->declaration;
 }
 
-static bool reference_has_local_shadow(const ReferenceList *references,
-                                       const Reference *reference) {
-  size_t index;
-
-  if (reference->function == NULL) {
-    return false;
-  }
-  for (index = 0; index < references->length; ++index) {
-    const Reference *candidate = &references->items[index];
-    if (!candidate->function_symbol && candidate->declaration &&
-        candidate->function != NULL && candidate->line <= reference->line &&
-        strcmp(candidate->name, reference->name) == 0 &&
-        strcmp(candidate->path, reference->path) == 0 &&
-        strcmp(candidate->function, reference->function) == 0) {
-      return true;
-    }
-  }
-  return false;
+static bool reference_scope_contains(const Reference *declaration,
+                                     const Reference *reference) {
+  return declaration->scope.start_byte <= reference->position &&
+         reference->position < declaration->scope.end_byte;
 }
 
-static void mark_function_symbols(ReferenceList *references) {
+static bool function_declarations_share_identity(const Reference *left,
+                                                 const Reference *right) {
+  if (strcmp(left->name, right->name) != 0 ||
+      left->linkage == SYMBOL_LINKAGE_NONE || left->linkage != right->linkage) {
+    return false;
+  }
+  return left->linkage == SYMBOL_LINKAGE_EXTERNAL ||
+         left->translation_unit == right->translation_unit;
+}
+
+static const Reference *visible_declaration(const ReferenceList *references,
+                                            const Reference *reference) {
+  const Reference *best = NULL;
   size_t index;
-  size_t candidate;
+
   for (index = 0; index < references->length; ++index) {
-    if (!references->items[index].function_symbol) {
+    const Reference *candidate = &references->items[index];
+    if (!candidate->ordinary_identifier || !candidate->declaration ||
+        candidate->translation_unit != reference->translation_unit ||
+        candidate->position > reference->position ||
+        strcmp(candidate->name, reference->name) != 0 ||
+        !reference_scope_contains(candidate, reference)) {
       continue;
     }
-    for (candidate = 0; candidate < references->length; ++candidate) {
-      if (strcmp(references->items[index].name,
-                 references->items[candidate].name) == 0 &&
-          !reference_has_local_shadow(references,
-                                      &references->items[candidate])) {
-        references->items[candidate].function_symbol = true;
+    if (best == NULL || candidate->scope.depth > best->scope.depth ||
+        (candidate->scope.depth == best->scope.depth &&
+         candidate->position > best->position)) {
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+static const Reference *
+external_function_declaration(const ReferenceList *references,
+                              const Reference *reference) {
+  size_t index;
+
+  for (index = 0; index < references->length; ++index) {
+    const Reference *candidate = &references->items[index];
+    if (candidate->ordinary_identifier && candidate->declares_function &&
+        candidate->linkage == SYMBOL_LINKAGE_EXTERNAL &&
+        candidate->scope.depth == 0 &&
+        candidate->translation_unit != reference->translation_unit &&
+        strcmp(candidate->name, reference->name) == 0) {
+      return candidate;
+    }
+  }
+  return NULL;
+}
+
+static void resolve_function_symbols(ReferenceList *references) {
+  size_t next_identity = 1;
+  size_t index;
+
+  for (index = 0; index < references->length; ++index) {
+    Reference *declaration = &references->items[index];
+    size_t candidate;
+
+    if (!declaration->ordinary_identifier || !declaration->declares_function) {
+      continue;
+    }
+    for (candidate = 0; candidate < index; ++candidate) {
+      const Reference *prior = &references->items[candidate];
+      if (prior->declares_function &&
+          function_declarations_share_identity(prior, declaration)) {
+        declaration->symbol_identity = prior->symbol_identity;
+        break;
       }
+    }
+    if (declaration->symbol_identity == 0) {
+      declaration->symbol_identity = next_identity++;
+    }
+  }
+
+  for (index = 0; index < references->length; ++index) {
+    Reference *reference = &references->items[index];
+    const Reference *declaration;
+
+    if (!reference->ordinary_identifier || reference->declaration) {
+      continue;
+    }
+    reference->function_symbol = false;
+    reference->linkage = SYMBOL_LINKAGE_NONE;
+    reference->symbol_identity = 0;
+    declaration = visible_declaration(references, reference);
+    if (declaration == NULL) {
+      declaration = external_function_declaration(references, reference);
+    }
+    if (declaration != NULL && declaration->declares_function) {
+      reference->function_symbol = true;
+      reference->linkage = declaration->linkage;
+      reference->symbol_identity = declaration->symbol_identity;
     }
   }
 }
@@ -1283,7 +1503,7 @@ static int emit_references(FILE *output, ReferenceList *references,
   size_t output_index = 0;
   int result = 0;
 
-  mark_function_symbols(references);
+  resolve_function_symbols(references);
   qsort(references->items, references->length, sizeof(*references->items),
         reference_compare);
   for (index = 0; index < references->length; ++index) {
@@ -1414,8 +1634,9 @@ int main(int argc, char **argv) {
 
   for (file_index = optind; file_index < argc; ++file_index) {
     ReferenceList references = {0};
-    int file_status = analyze_file(argv[file_index], encoding_option,
-                                   &preprocessor_options, &references);
+    int file_status =
+        analyze_file(argv[file_index], encoding_option, &preprocessor_options,
+                     &references, (size_t)(file_index - optind + 1));
     if (file_status != 0) {
       status = 1;
     }

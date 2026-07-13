@@ -194,6 +194,14 @@ class Cxref < Formula
       #else
       int inactive_conditional;
       #endif
+
+      int after_shadow(void) {
+        {
+          int target = 0;
+          target += 1;
+        }
+        return target();
+      }
     C
     first_include = workspace/"first"
     second_include = workspace/"second"
@@ -211,6 +219,22 @@ class Cxref < Formula
     C
     (workspace/"-input.c").write "int leading_operand;\n"
     (workspace/"-").write "int dash_operand;\n"
+    (workspace/"linkage_a.c").write <<~C
+      static int helper(void) {
+        return 1;
+      }
+
+      int from_a(void) {
+        return helper();
+      }
+    C
+    (workspace/"linkage_b.c").write <<~C
+      int helper;
+
+      int from_b(void) {
+        return helper;
+      }
+    C
 
     env = { "KERNEL_CWD" => "/work" }
     mount = { "/work" => workspace }
@@ -238,6 +262,17 @@ class Cxref < Formula
     assert_match(%r{^FEATURE \| /work/review\.c \| - \| 25$}, reviewed)
     assert_match(%r{^macro_global \| /work/review\.c \| - \| 5$}, reviewed)
     refute_match(%r{^macro_global \| /work/review\.c \| macro_read \| 16$}, reviewed)
+    assert_match(%r{^target \| /work/review\.c \| after_shadow \| \*33$}, reviewed)
+    assert_match(%r{^target \| /work/review\.c \| - \| 36$}, reviewed)
+    refute_match(%r{^target \| /work/review\.c \| after_shadow \| 36$}, reviewed)
+
+    linked = kandelo_run_wasm(
+      bin/"cxref", ["-cs", "linkage_a.c", "linkage_b.c"],
+      env: env, writable_host_directories: mount
+    )
+    assert_match(%r{^helper \| /work/linkage_a\.c \| - \| 6$}, linked)
+    assert_match(%r{^helper \| /work/linkage_b\.c \| from_b \| 4$}, linked)
+    refute_match(%r{^helper \| /work/linkage_b\.c \| - \| 4$}, linked)
 
     ordered = kandelo_run_wasm(
       bin/"cxref",
@@ -292,7 +327,8 @@ class Cxref < Formula
       [
         "-cs", "-I/work/include", "-USELECT_PATH", "-DSELECT_PATH",
         "-I/work/first", "-DORDERED=1", "-I/work/second", "-UORDERED", "-DORDERED=2",
-        "/work/one.c", "/work/conditional.c", "/work/review.c", "/work/option_order.c"
+        "/work/one.c", "/work/conditional.c", "/work/review.c", "/work/option_order.c",
+        "/work/linkage_a.c", "/work/linkage_b.c"
       ],
       argv0:       "cxref",
       guest_files: {
@@ -303,6 +339,8 @@ class Cxref < Formula
         "/work/option_order.c"    => workspace/"option_order.c",
         "/work/first/choice.h"    => first_include/"choice.h",
         "/work/second/choice.h"   => second_include/"choice.h",
+        "/work/linkage_a.c"       => workspace/"linkage_a.c",
+        "/work/linkage_b.c"       => workspace/"linkage_b.c",
       },
       timeout_ms:  120_000,
     )
@@ -314,6 +352,11 @@ class Cxref < Formula
     assert_match(%r{^FEATURE \| /work/review\.c \| - \| 25$}, browser_output)
     assert_match(%r{^macro_global \| /work/review\.c \| - \| 5$}, browser_output)
     refute_match(%r{^macro_global \| /work/review\.c \| macro_read \| 16$}, browser_output)
+    assert_match(%r{^target \| /work/review\.c \| - \| 36$}, browser_output)
+    refute_match(%r{^target \| /work/review\.c \| after_shadow \| 36$}, browser_output)
+    assert_match(%r{^helper \| /work/linkage_a\.c \| - \| 6$}, browser_output)
+    assert_match(%r{^helper \| /work/linkage_b\.c \| from_b \| 4$}, browser_output)
+    refute_match(%r{^helper \| /work/linkage_b\.c \| - \| 4$}, browser_output)
     assert_match(%r{^first_choice \| /work/first/choice\.h \| - \| \*1$}, browser_output)
     assert_match(%r{^final_define \| /work/option_order\.c \| - \| \*3$}, browser_output)
   end
