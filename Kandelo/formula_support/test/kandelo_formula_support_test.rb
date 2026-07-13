@@ -16,8 +16,8 @@ class KandeloFormulaSupportTest < Minitest::Test
   class Harness
     include KandeloFormulaSupport
 
-    attr_accessor :build_path, :dependency_formulae, :nix_path, :prefix_path, :root_path, :runtime_formulae,
-                  :shell_result, :test_path
+    attr_accessor :build_path, :dependency_formulae, :homebrew_prefix_path, :nix_path, :prefix_path, :root_path,
+                  :runtime_formulae, :shell_result, :test_path
     attr_reader :command, :expected_status, :recorded_launcher, :system_args, :system_calls
 
     def kandelo_require_root!
@@ -38,6 +38,10 @@ class KandeloFormulaSupportTest < Minitest::Test
 
     def kandelo_nix_executable
       nix_path || super
+    end
+
+    def kandelo_homebrew_prefix
+      homebrew_prefix_path || super
     end
 
     def kandelo_formula(formula_name)
@@ -331,8 +335,9 @@ class KandeloFormulaSupportTest < Minitest::Test
     end
   end
 
-  def test_host_build_path_keeps_native_tools_and_removes_target_runtime_bins
+  def test_host_build_path_keeps_native_tools_and_removes_all_target_entry_points
     harness = Harness.new
+    harness.homebrew_prefix_path = Pathname("/prefix")
     harness.runtime_formulae = [
       DependencyFormula.new(
         full_name:   "automattic/kandelo-homebrew/coreutils",
@@ -349,6 +354,8 @@ class KandeloFormulaSupportTest < Minitest::Test
     ]
     original = ENV.to_hash
     ENV["PATH"] = [
+      "/prefix/bin",
+      "/prefix/sbin",
       "/prefix/opt/coreutils/bin",
       "/prefix/opt/coreutils/sbin",
       "/prefix/opt/coreutils/libexec/bin",
@@ -357,12 +364,35 @@ class KandeloFormulaSupportTest < Minitest::Test
     ].join(File::PATH_SEPARATOR)
 
     harness.kandelo_isolate_host_build_path!
-    build_path = ENV.fetch("PATH")
+    build_path = ENV.fetch("PATH").split(File::PATH_SEPARATOR)
 
+    refute_includes build_path, "/prefix/bin"
+    refute_includes build_path, "/prefix/sbin"
     refute_includes build_path, "/prefix/opt/coreutils/bin"
     refute_includes build_path, "/prefix/opt/coreutils/sbin"
     refute_includes build_path, "/prefix/opt/coreutils/libexec/bin"
     assert_includes build_path, "/prefix/opt/wabt/bin"
+    assert_includes build_path, "/usr/bin"
+  ensure
+    ENV.replace(original) if original
+  end
+
+  def test_sdk_activation_cannot_reintroduce_the_global_homebrew_path
+    harness = Harness.new
+    harness.homebrew_prefix_path = Pathname("/prefix")
+    harness.root_path = "/tmp/kandelo-root"
+    harness.runtime_formulae = []
+    original = ENV.to_hash
+    ENV["PATH"] = ["/prefix/opt/cmake/bin", "/usr/bin"].join(File::PATH_SEPARATOR)
+    ENV["HOMEBREW_KANDELO_NODE"] = "/prefix/bin/node"
+    ENV["HOMEBREW_KANDELO_LLVM_BIN"] = "/prefix/bin"
+
+    harness.kandelo_activate_sdk!
+    build_path = ENV.fetch("PATH").split(File::PATH_SEPARATOR)
+
+    refute_includes build_path, "/prefix/bin"
+    assert_includes build_path, "/tmp/kandelo-root/sdk/bin"
+    assert_includes build_path, "/prefix/opt/cmake/bin"
     assert_includes build_path, "/usr/bin"
   ensure
     ENV.replace(original) if original
