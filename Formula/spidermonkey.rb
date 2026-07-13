@@ -287,9 +287,11 @@ class Spidermonkey < Formula
     dependency_paths = dependencies.values.flat_map do |path|
       [path.to_s, path.realpath.to_s]
     end
+    builder_homes = [Dir.home, "/home/runner"].map { |path| "#{path.delete_suffix("/")}/" }.uniq
     markers = [
       *build_paths,
       *dependency_paths,
+      *builder_homes,
       root.to_s,
       prefix.to_s,
       "/private/tmp/",
@@ -298,6 +300,10 @@ class Spidermonkey < Formula
       "/usr/local/Cellar/",
       "/usr/src/tmp/",
     ].uniq
+    runner_workspace = binary.match?(%r{/home/runner/(?:_work|work)/})
+    odie "SpiderMonkey contains a GitHub Actions workspace path" if runner_workspace
+    runner_rustup = binary.match?(%r{/home/runner/\.rustup(?:/|$)})
+    odie "SpiderMonkey contains a GitHub Actions Rust toolchain path" if runner_rustup
     markers.each do |marker|
       odie "SpiderMonkey contains builder path marker #{marker}" if binary.include?(marker)
     end
