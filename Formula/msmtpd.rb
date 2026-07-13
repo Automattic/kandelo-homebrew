@@ -38,7 +38,6 @@ class Msmtpd < Formula
         "--with-msmtpd"
       programs = %w[msmtp msmtpd]
       system "make", "-C", "src", "-j#{ENV.make_jobs}", *programs
-      artifact_guards = "#{root}/scripts/wasm-artifact-guards.sh"
       programs.each do |program|
         optimized = buildpath/"src/#{program}.optimized"
         instrumented = buildpath/"src/#{program}.instrumented"
@@ -48,19 +47,6 @@ class Msmtpd < Formula
 
         system "bash", "-c", <<~SH
           set -euo pipefail
-          . #{artifact_guards.shellescape}
-          expected_abi=$(wasm_current_abi_version #{root.to_s.shellescape})
-          artifact_abi=$(wasm_extract_abi_version #{instrumented.to_s.shellescape})
-          if [ -z "$expected_abi" ] || [ "$artifact_abi" != "$expected_abi" ]; then
-            echo "ERROR: #{program} ABI $artifact_abi does not match Kandelo ABI $expected_abi" >&2
-            exit 1
-          fi
-          wasm_require_no_legacy_asyncify #{instrumented.to_s.shellescape}
-          wasm_require_fork_instrumentation_if_needed #{instrumented.to_s.shellescape}
-          if ! wasm_has_complete_fork_instrumentation #{instrumented.to_s.shellescape}; then
-            echo "ERROR: #{program} has incomplete fork instrumentation" >&2
-            exit 1
-          fi
           unexpected_env_imports=$(wasm-objdump -x #{instrumented.to_s.shellescape} |
             awk '/<- env[.]/ { sub(/^.*<- env[.]/, ""); print $1 }' |
             grep -Ev '^(__channel_base|memory)$' || true)
@@ -70,6 +56,7 @@ class Msmtpd < Formula
             exit 1
           fi
         SH
+        kandelo_validate_wasm_artifact(instrumented, fork: :required)
       end
     end
 
