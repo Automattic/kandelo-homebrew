@@ -2,6 +2,8 @@
 # frozen_string_literal: true
 
 require "minitest/autorun"
+# Used to exercise the strict compiler wrapper as an external build tool.
+require "open3"
 # Standalone Ruby does not preload Homebrew's Pathname helper.
 require "pathname" # rubocop:disable Lint/RedundantRequireStatement
 require "tmpdir"
@@ -285,6 +287,32 @@ class KandeloFormulaSupportTest < Minitest::Test
     assert_includes error.message, "invalid Kandelo fork policy"
   end
 
+  def test_strict_wasm_link_wrapper_rejects_unresolved_env_imports
+    Dir.mktmpdir("kandelo-strict-link") do |dir|
+      fixture = strict_link_fixture(dir, " - func[0] sig=0 <missing> <- env.missing_symbol")
+      _stdout, stderr, status = Open3.capture3(
+        fixture.fetch(:env), fixture.fetch(:wrapper).to_s, "-o", fixture.fetch(:output).to_s
+      )
+
+      refute status.success?
+      assert_includes stderr, "unresolved non-ABI imports"
+      assert_includes stderr, "missing_symbol"
+      refute fixture.fetch(:output).exist?
+    end
+  end
+
+  def test_strict_wasm_link_wrapper_accepts_abi_imports_and_dispatches_cxx
+    Dir.mktmpdir("kandelo-strict-link") do |dir|
+      fixture = strict_link_fixture(dir, " - global[0] i32 mutable=1 <- env.__channel_base", cxx: true)
+      _stdout, stderr, status = Open3.capture3(
+        fixture.fetch(:env), fixture.fetch(:wrapper).to_s, "-o", fixture.fetch(:output).to_s
+      )
+
+      assert status.success?, stderr
+      assert_equal "cxx", fixture.fetch(:output).read
+    end
+  end
+
   def test_host_tool_reenters_the_dev_shell_and_preserves_the_caller_directory
     Dir.mktmpdir("kandelo-formula-support") do |dir|
       harness = Harness.new
@@ -381,6 +409,7 @@ class KandeloFormulaSupportTest < Minitest::Test
     assert_includes harness.command, "KANDELO_FORMULA_GUEST_ENV_JSON="
     assert_includes harness.command, "KANDELO_FORMULA_ENABLE_NETWORK=1"
     assert_includes harness.command, "KANDELO_FORMULA_EXPECTED_FORK_DESCENDANTS=1"
+    assert_includes harness.command, "KANDELO_FORMULA_MAX_WORKERS=8"
     assert_includes harness.command, "TOKEN"
     refute_includes harness.command, "TOKEN=x\\ y"
     assert_includes harness.command, "program.wasm a\\ b"
@@ -395,6 +424,15 @@ class KandeloFormulaSupportTest < Minitest::Test
     end
 
     assert_includes error.message, "expected fork descendant count must be a nonnegative integer"
+  end
+
+  def test_execution_accepts_a_larger_worker_budget
+    harness = Harness.new
+
+    harness.kandelo_run_wasm("program.wasm", [], max_workers: 16)
+
+    assert_includes harness.command, "run-network-wasm.ts"
+    assert_includes harness.command, "KANDELO_FORMULA_MAX_WORKERS=16"
   end
 
   def test_default_execution_keeps_standard_runner_and_removes_stale_host_dist
@@ -815,5 +853,46 @@ class KandeloFormulaSupportTest < Minitest::Test
     harness.build_path = build
     harness.prefix_path = Pathname(dir)/"cellar/formula/1.0"
     harness
+  end
+
+  def strict_link_fixture(dir, import_line, cxx: false)
+    root = Pathname(dir)
+    wrapper = root/(cxx ? "strict-c++" : "strict-cc")
+    wrapper.binwrite((Pathname(__dir__).parent/"strict-wasm-link-cc.sh").binread)
+    File.chmod(0755, wrapper)
+
+    cc = root/"fake-cc"
+    cxx_compiler = root/"fake-cxx"
+    cc.binwrite <<~SH
+      #!/bin/sh
+      printf cc > "$2"
+    SH
+    cxx_compiler.binwrite <<~SH
+      #!/bin/sh
+      printf cxx > "$2"
+    SH
+    File.chmod(0755, cc)
+    File.chmod(0755, cxx_compiler)
+
+    objdump = root/"wasm-objdump"
+    objdump.binwrite <<~SH
+      #!/bin/sh
+      case "$1" in
+        -h) exit 0 ;;
+        -x) printf '%s\n' #{import_line.shellescape} ;;
+        *) exit 1 ;;
+      esac
+    SH
+    File.chmod(0755, objdump)
+
+    {
+      env:     {
+        "KANDELO_STRICT_REAL_CC"  => cc.to_s,
+        "KANDELO_STRICT_REAL_CXX" => cxx_compiler.to_s,
+        "PATH"                    => "#{root}:#{ENV.fetch("PATH")}",
+      },
+      wrapper: wrapper,
+      output:  root/"program.wasm",
+    }
   end
 end
