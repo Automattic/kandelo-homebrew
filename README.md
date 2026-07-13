@@ -57,6 +57,8 @@ Current migration controls and pilots include:
 - `pax`, the MirBSD pax, cpio, and tar interfaces for portable archive interchange.
 - `gencat`, the POSIX message-catalog compiler producing catalogs consumed by
   Kandelo's musl `catopen` and `catgets` implementation.
+- `procps`, the upstream `ps` process reporter backed by Kandelo's truthful
+  cross-process procfs state.
 - `ctags`, Universal Ctags' maintained tag generator, `readtags` query client,
   and optscript interpreter with complete C and C++ workflows.
 
