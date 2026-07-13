@@ -1,0 +1,56 @@
+.TH CXREF 1 "July 2026" "Kandelo" "User Commands"
+.SH NAME
+cxref \- generate a C-language program cross-reference table
+.SH SYNOPSIS
+.B cxref
+.RB [ \-cs ]
+.RB [ \-o " file" ]
+.RB [ \-w " num" ]
+.RB [ \-D " name" [ =def ]]
+.RB [ \-I " dir" ]
+.RB [ \-U " name" ]
+.I file ...
+.SH DESCRIPTION
+.B cxref
+preprocesses and analyzes C source files, then writes a sorted list of C
+symbols, their source paths, enclosing functions, and line references.
+An asterisk before a line number marks a declaring reference.
+Macro definitions and uses are included.
+.SH OPTIONS
+.TP
+.B \-c
+Combine references from all input files into one sorted listing.
+.TP
+.B \-s
+Do not print input filename headings.
+.TP
+.BI \-o " file"
+Write the listing to
+.I file
+instead of standard output.
+.TP
+.BI \-w " num"
+Limit output lines to
+.I num
+columns. Values below 51 select the default width of 80 columns.
+.TP
+.BI \-D " name" [ =def ]
+Define a preprocessor macro.
+.TP
+.BI \-I " dir"
+Add a header search directory.
+.TP
+.BI \-U " name"
+Remove a preprocessor macro definition.
+.PP
+The order of
+.BR \-D ,
+.BR \-I ,
+and
+.B \-U
+options is significant.
+.SH EXIT STATUS
+Zero indicates successful completion. A value greater than zero indicates an
+option, input, preprocessing, parsing, or output error.
+.SH SEE ALSO
+.BR c17 (1)
