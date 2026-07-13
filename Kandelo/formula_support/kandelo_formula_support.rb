@@ -85,23 +85,36 @@ module KandeloFormulaSupport
     odie "unsupported Kandelo architecture #{kandelo_arch}; expected #{supported.join(", ")}"
   end
 
-  # Prepend the Kandelo SDK, Node, and LLVM to PATH and export the LLVM env the
-  # SDK wrappers read. Returns the resolved Kandelo root. This is the single
-  # place SDK/toolchain activation happens.
+  def kandelo_prepend_path!(path)
+    if ENV.respond_to?(:prepend_path)
+      ENV.prepend_path "PATH", path
+      return
+    end
+
+    entries = ENV.fetch("PATH", "").split(File::PATH_SEPARATOR)
+    ENV["PATH"] = [path.to_s, *entries.reject { |entry| entry == path.to_s }].join(File::PATH_SEPARATOR)
+  end
+
+  # Prepend the Kandelo SDK, Node, and LLVM to PATH, export the LLVM env the SDK
+  # wrappers read, then remove global and target executable directories. The
+  # isolation must run after activation because an explicit Node or LLVM bridge
+  # can itself name Homebrew's global bin directory. Returns the resolved
+  # Kandelo root. This is the single place SDK/toolchain activation happens.
   def kandelo_activate_sdk!
     root = kandelo_require_root!
-    ENV.prepend_path "PATH", "#{root}/sdk/bin"
+    kandelo_prepend_path! "#{root}/sdk/bin"
 
     if (node = ENV.fetch("HOMEBREW_KANDELO_NODE", nil)).to_s != ""
-      ENV.prepend_path "PATH", File.dirname(node)
+      kandelo_prepend_path! File.dirname(node)
     end
 
     if (llvm_bin = ENV.fetch("HOMEBREW_KANDELO_LLVM_BIN", nil)).to_s != ""
       ENV["WASM_POSIX_LLVM_DIR"] = llvm_bin
       ENV["LLVM_BIN"] = llvm_bin
-      ENV.prepend_path "PATH", llvm_bin
+      kandelo_prepend_path! llvm_bin
     end
 
+    kandelo_isolate_host_build_path!
     root
   end
 
@@ -186,20 +199,33 @@ module KandeloFormulaSupport
     Pathname("/nix/var/nix/profiles/default/bin/nix")
   end
 
+  def kandelo_homebrew_prefix
+    return Pathname(HOMEBREW_PREFIX.to_s) if defined?(HOMEBREW_PREFIX)
+
+    value = ENV.fetch("HOMEBREW_PREFIX", nil)
+    value.to_s.empty? ? nil : Pathname(value)
+  end
+
   # Homebrew assumes every dependency executable runs on the build host and
-  # adds every opt_bin to PATH. Kandelo tap runtime dependencies are target
-  # Wasm, so executing them during configure would cross the host/target
-  # boundary. Keep native build dependencies while removing target executable
-  # directories; Formulae still address target headers and libraries through
-  # their explicit formula_opt_prefix paths.
+  # adds every opt_bin to PATH. Its global bin directories can also contain
+  # linked executables from unrelated Kandelo Formulae. Those executables are
+  # target Wasm, so executing them during configure would cross the host/target
+  # boundary. Keep native build-dependency opt paths while removing the global
+  # prefix and declared target executable directories; Formulae still address
+  # target headers and libraries through their explicit formula_opt_prefix
+  # paths.
   def kandelo_isolate_host_build_path!
     runtime_dependencies = runtime_formula_dependencies(read_from_tab: false, undeclared: false)
     target_dependencies = runtime_dependencies.select do |dependency|
       dependency.full_name.start_with?(KANDELO_TAP_FORMULA_PREFIX)
     end
-    target_paths = target_dependencies.flat_map do |dependency|
-      [dependency.opt_bin, dependency.opt_sbin, dependency.opt_libexec/"bin"]
+    target_paths = []
+    if (homebrew_prefix = kandelo_homebrew_prefix)
+      target_paths.push(homebrew_prefix/"bin", homebrew_prefix/"sbin")
     end
+    target_paths.concat(target_dependencies.flat_map do |dependency|
+      [dependency.opt_bin, dependency.opt_sbin, dependency.opt_libexec/"bin"]
+    end)
     target_paths.map! { |path| File.expand_path(path.to_s) }
 
     return if target_paths.empty?
@@ -214,7 +240,6 @@ module KandeloFormulaSupport
   # install block, then restore Homebrew's environment when the block exits.
   def kandelo_wasm_build
     saved = ENV.to_hash
-    kandelo_isolate_host_build_path!
     root = kandelo_activate_sdk!
     kandelo_activate_sysroot!(root)
 

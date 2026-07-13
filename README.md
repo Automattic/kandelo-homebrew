@@ -66,14 +66,16 @@ host used by Formula `test do` blocks. Guest installation therefore requires a
 published Kandelo bottle; building from source is currently a maintainer and CI
 workflow.
 
-During a source build, the shared Formula support removes Kandelo runtime
-dependency executable directories from the host `PATH`. Those dependencies are
-target Wasm. Full tap names passed to the `formula_opt_*` helpers resolve to the
-exact installed target keg, so a native Homebrew alias with the same short name
-cannot redirect a cross build to host headers or libraries. Formulae map those
-host keg paths to stable guest opt paths for compiled runtime identities and
-explicit test staging. Native Homebrew build dependencies remain on the host
-`PATH`.
+During a source build, the shared Formula support removes Homebrew's global
+`bin`/`sbin` directories and Kandelo runtime dependency executable directories
+from the host `PATH`. Those paths can contain linked target Wasm from unrelated
+Formulae as well as the current Formula's dependencies. Full tap names passed
+to the `formula_opt_*` helpers resolve to the exact installed target keg, so a
+native Homebrew alias with the same short name cannot redirect a cross build to
+host headers or libraries. Formulae map those host keg paths to stable guest
+opt paths for compiled runtime identities and explicit test staging. Native
+Homebrew build dependencies remain available through their versioned `opt/bin`
+paths.
 
 ## Publication State
 
