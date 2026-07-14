@@ -10,6 +10,9 @@ class Gzip < Formula
   sha256 "01a7b881bd220bfdf615f97b8718f80bdfd3f6add385b993dcf6efd14e8c0ac6"
   license "GPL-3.0-or-later"
 
+  depends_on "binaryen" => :build
+  depends_on "wabt" => :build
+
   skip_clean "bin/gzip"
 
   def install
@@ -24,6 +27,7 @@ class Gzip < Formula
 
       system kandelo_configure, *kandelo_std_configure_args, "--disable-nls"
       system "make"
+      kandelo_validate_wasm_artifact(buildpath/"gzip", fork: :forbidden)
     end
 
     kandelo_install_bin(buildpath, "gzip", "gzip")
