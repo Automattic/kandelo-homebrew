@@ -2,6 +2,7 @@ import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { addDefaultBaseExecPrograms } from "./base-exec-programs.ts";
 import {
   type ExpectedForkDescendants,
   parseExpectedForkDescendants,
@@ -106,6 +107,13 @@ async function main(): Promise<void> {
   const execPrograms = JSON.parse(
     process.env.KANDELO_FORMULA_EXEC_PROGRAMS_JSON ?? "{}",
   ) as Record<string, string>;
+  if (!Object.hasOwn(execPrograms, "/bin/sh")) {
+    const binaryResolverUrl = pathToFileURL(
+      join(root, "host/src/binary-resolver.ts"),
+    ).href;
+    const { resolveBinary } = await import(binaryResolverUrl);
+    addDefaultBaseExecPrograms(execPrograms, resolveBinary);
+  }
   const guestFiles = JSON.parse(
     process.env.KANDELO_FORMULA_GUEST_FILES_JSON ?? "{}",
   ) as Record<string, string>;

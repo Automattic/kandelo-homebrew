@@ -96,6 +96,13 @@ with intentional signal-based teardown may instead declare the exact multiset
 of expected descendant statuses. Missing, extra, or unexpected descendants fail
 the test.
 
+The isolated Node runner used by `kandelo_run_wasm` receives `/bin/sh` from
+Kandelo's reviewed binary resolver. The publisher materializes the wasm32 Dash
+base-system artifact for every target architecture, including wasm64 Formula
+builds, and a missing or stale artifact fails the test. An explicit `/bin/sh`
+entry in `exec_programs:` remains authoritative for tests that deliberately
+exercise another shell.
+
 ## Publication State
 
 Bottle metadata must be generated from the same trusted build that produces
