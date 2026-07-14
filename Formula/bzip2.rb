@@ -10,6 +10,8 @@ class Bzip2 < Formula
   license "bzip2-1.0.6"
   revision 1
 
+  depends_on "binaryen" => :build
+  depends_on "wabt" => :build
   depends_on "pkgconf" => :test
 
   skip_clean "bin/bzip2", "lib/libbz2.a"
@@ -25,6 +27,7 @@ class Bzip2 < Formula
         "CFLAGS=-Wall -Winline -O2 -fPIC -D_FILE_OFFSET_BITS=64",
         "LDFLAGS=",
         "libbz2.a", "bzip2"
+      kandelo_validate_wasm_artifact(buildpath/"bzip2", fork: :forbidden)
     end
     kandelo_install_bin(buildpath, "bzip2", "bzip2")
     lib.install "libbz2.a"
