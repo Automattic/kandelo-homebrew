@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "minitest/autorun"
+require "open3"
 # Standalone Ruby does not preload Homebrew's Pathname helper.
 require "pathname" # rubocop:disable Lint/RedundantRequireStatement
 require "tmpdir"
@@ -85,6 +86,38 @@ class KandeloFormulaSupportTest < Minitest::Test
     end
   end
 
+  # Simulates the guest-output file contract without launching Node.
+  class GuestOutputHarness < Harness
+    attr_accessor :guest_output
+
+    def shell_output(command, expected_status = 0)
+      output = super
+      assignment = Shellwords.shellsplit(command).find do |token|
+        token.start_with?("KANDELO_GUEST_OUTPUT_FILE=")
+      end
+      raise "guest output sink assignment is missing" unless assignment
+
+      output_path = assignment.delete_prefix("KANDELO_GUEST_OUTPUT_FILE=")
+      File.binwrite(output_path, guest_output || "guest output\n")
+      output
+    end
+  end
+
+  # Executes Formula commands while retaining the embedding streams separately.
+  class RuntimeHarness < Harness
+    attr_reader :process_stderr, :process_stdout
+
+    def shell_output(command, expected_status = 0)
+      @command = command
+      @expected_status = expected_status
+      @process_stdout, @process_stderr, status = Open3.capture3(command)
+      $stderr.write(process_stderr) unless process_stderr.empty?
+      raise "unexpected exit status #{status.exitstatus}" if status.exitstatus != expected_status
+
+      process_stdout
+    end
+  end
+
   # Executes validator commands with a controlled PATH for fail-closed tests.
   class ExecutingHarness < Harness
     attr_accessor :system_path
@@ -94,6 +127,33 @@ class KandeloFormulaSupportTest < Minitest::Test
 
       raise "command failed: #{args.join(" ")}"
     end
+  end
+
+  def with_fake_formula_node
+    original = ENV.to_hash
+    Dir.mktmpdir("kandelo-formula-guest-output-runtime") do |dir|
+      root = Pathname(dir)/"kandelo root"
+      test_path = Pathname(dir)/"formula test"
+      fake_bin = Pathname(dir)/"fake bin"
+      root.mkpath
+      test_path.mkpath
+      fake_bin.mkpath
+      fake_node = fake_bin/"node"
+      fake_node.binwrite <<~SH
+        #!/bin/sh
+        printf 'guest stdout\\n' > "$KANDELO_GUEST_OUTPUT_FILE"
+        printf 'guest stderr\\n' >> "$KANDELO_GUEST_OUTPUT_FILE"
+        printf 'host diagnostic\\n' >&2
+        exit 1
+      SH
+      fake_node.chmod(0755)
+      ENV["PATH"] = [fake_bin, ENV.fetch("PATH")].join(File::PATH_SEPARATOR)
+      ENV.delete("HOMEBREW_KANDELO_NODE")
+
+      yield root, test_path
+    end
+  ensure
+    ENV.replace(original) if original
   end
 
   def test_node_execution_receipt_is_optional
@@ -559,6 +619,81 @@ class KandeloFormulaSupportTest < Minitest::Test
     refute_includes harness.command, "TOKEN=x\\ y"
     assert_includes harness.command, "program.wasm a\\ b"
     refute_includes harness.command, "examples/run-example.ts"
+  end
+
+  def test_merge_stderr_constructs_guest_only_capture_for_both_formula_runners
+    Dir.mktmpdir("kandelo-formula-guest-output") do |dir|
+      root = Pathname(dir)/"kandelo root"
+      test_path = Pathname(dir)/"formula test"
+      root.mkpath
+      test_path.mkpath
+
+      [[false, "examples/run-example.ts"], [true, "run-network-wasm.ts"]].each do |network, runner|
+        harness = GuestOutputHarness.new
+        harness.root_path = root.to_s
+        harness.test_path = test_path
+        harness.guest_output = "guest stdout\nguest stderr\n"
+        harness.shell_result = "host process stdout\n"
+
+        _, diagnostic_output = capture_io do
+          output = harness.kandelo_run_wasm(
+            "program.wasm", [], merge_stderr: true, network:, expected_status: 1
+          )
+          assert_equal "guest stdout\nguest stderr\n", output
+        end
+
+        assert_equal "host process stdout\n", diagnostic_output
+        assert_includes harness.command, runner
+        assert_includes harness.command, "KANDELO_GUEST_OUTPUT_FILE="
+        refute_includes harness.command, "2>&1"
+        assert_equal 1, harness.expected_status
+        refute_path_exists test_path/".program.wasm.guest-output"
+      end
+    end
+  end
+
+  def test_merge_stderr_runtime_keeps_host_diagnostics_out_of_guest_output
+    with_fake_formula_node do |root, test_path|
+      [false, true].each do |network|
+        harness = RuntimeHarness.new
+        harness.root_path = root.to_s
+        harness.test_path = test_path
+
+        _, diagnostic_output = capture_io do
+          output = harness.kandelo_run_wasm(
+            "program.wasm", [], merge_stderr: true, network:, expected_status: 1
+          )
+          assert_equal "guest stdout\nguest stderr\n", output
+        end
+
+        assert_equal "", harness.process_stdout
+        assert_equal "host diagnostic\n", harness.process_stderr
+        assert_equal "host diagnostic\n", diagnostic_output
+        refute_includes harness.command, "2>&1"
+      end
+    end
+  end
+
+  def test_merge_stderr_runtime_prints_guest_output_when_status_is_unexpected
+    with_fake_formula_node do |root, test_path|
+      [false, true].each do |network|
+        harness = RuntimeHarness.new
+        harness.root_path = root.to_s
+        harness.test_path = test_path
+
+        _, diagnostic_output = capture_io do
+          error = assert_raises(RuntimeError) do
+            harness.kandelo_run_wasm(
+              "program.wasm", [], merge_stderr: true, network:, expected_status: 0
+            )
+          end
+          assert_equal "unexpected exit status 1", error.message
+        end
+
+        assert_equal "host diagnostic\nguest stdout\nguest stderr\n", diagnostic_output
+        refute_path_exists test_path/".program.wasm.guest-output"
+      end
+    end
   end
 
   def test_execution_rejects_invalid_expected_fork_descendant_count
