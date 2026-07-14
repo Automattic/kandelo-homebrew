@@ -13,6 +13,8 @@ class Xz < Formula
   license all_of: ["GPL-2.0-or-later", "LGPL-2.1-or-later", "0BSD"]
   revision 1
 
+  depends_on "binaryen" => :build
+  depends_on "wabt" => :build
   depends_on "pkgconf" => :test
 
   skip_clean "bin", "lib/liblzma.a"
@@ -45,6 +47,8 @@ class Xz < Formula
         "--disable-lzmainfo",
         "--enable-sandbox=no"
       system "make"
+      kandelo_validate_wasm_artifact(buildpath/"src/xz/xz", fork: :forbidden)
+      kandelo_validate_wasm_artifact(buildpath/"src/xzdec/xzdec", fork: :forbidden)
       system "make", "install"
     end
 
