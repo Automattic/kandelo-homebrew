@@ -10,6 +10,9 @@ class Sed < Formula
   sha256 "6e226b732e1cd739464ad6862bd1a1aba42d7982922da7a53519631d24975181"
   license "GPL-3.0-or-later"
 
+  depends_on "binaryen" => :build
+  depends_on "wabt" => :build
+
   skip_clean "bin/sed"
 
   def install
@@ -20,6 +23,7 @@ class Sed < Formula
 
       system kandelo_configure, *kandelo_std_configure_args, "--disable-nls"
       system "make"
+      kandelo_validate_wasm_artifact(buildpath/"sed/sed", fork: :forbidden)
     end
 
     kandelo_install_bin(buildpath/"sed", "sed", "sed")

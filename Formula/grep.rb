@@ -9,6 +9,9 @@ class Grep < Formula
   sha256 "1db2aedde89d0dea42b16d9528f894c8d15dae4e190b59aecc78f5a951276eab"
   license "GPL-3.0-or-later"
 
+  depends_on "binaryen" => :build
+  depends_on "wabt" => :build
+
   skip_clean "bin/grep"
 
   def install
@@ -23,6 +26,7 @@ class Grep < Formula
         "--disable-perl-regexp",
         "--disable-dependency-tracking"
       system "make", "-j#{ENV.make_jobs}"
+      kandelo_validate_wasm_artifact(buildpath/"src/grep", fork: :forbidden)
     end
 
     kandelo_install_bin(buildpath/"src", "grep", "grep")
