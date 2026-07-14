@@ -9,7 +9,9 @@ class Curl < Formula
   sha256 "c7ca7db48b0909743eaef34250da02c19bc61d4f1dcedd6603f109409536ab56"
   license "curl"
 
+  depends_on "binaryen" => :build
   depends_on "pkgconf" => :build
+  depends_on "wabt" => :build
   depends_on "automattic/kandelo-homebrew/libcurl"
   depends_on "automattic/kandelo-homebrew/openssl"
   depends_on "automattic/kandelo-homebrew/zlib"
@@ -71,6 +73,15 @@ class Curl < Formula
       # Upstream's curl target hardcodes its sibling libcurl.la. Build only the
       # CLI and replace that dependency with the installed tap libcurl contract.
       system "make", "-C", "src", "curl", "curl_DEPENDENCIES=", "curl_LDADD=#{link_flags.join(" ")}"
+
+      dependency_paths = [libcurl, openssl, zlib].flat_map do |dependency|
+        [dependency, dependency.realpath]
+      end.uniq
+      kandelo_validate_wasm_artifact(
+        buildpath/"src/curl",
+        fork:            :forbidden,
+        forbidden_paths: dependency_paths,
+      )
     end
 
     kandelo_install_bin(buildpath/"src", "curl", "curl")
@@ -113,5 +124,24 @@ class Curl < Formula
       guest_files: { guest_ca_bundle => ca_bundle },
     )
     assert_equal "curl-ok 200 0\n", output
+
+    browser_write_out = "curl-browser-ok %" + "{http_code} %" + "{ssl_verify_result}\\n"
+    browser_output = kandelo_run_browser_wasm(
+      bin/"curl",
+      [
+        "--disable",
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--http1.1",
+        "--tlsv1.2",
+        "--tls-max", "1.2",
+        "--max-time", "30",
+        "--output", "/dev/null",
+        "--write-out", browser_write_out,
+        "https://nghttp2.org/httpbin/status/204"
+      ],
+    )
+    assert_equal "curl-browser-ok 204 0\n", browser_output
   end
 end
