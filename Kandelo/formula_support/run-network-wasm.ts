@@ -8,6 +8,7 @@ import {
   parseExpectedForkDescendants,
   validateForkDescendantStatuses,
 } from "./fork-descendant-statuses.ts";
+import { createGuestOutput } from "./guest-output.ts";
 import { rootfsSizeForStagedBytes, validateGuestPath } from "./rootfs-size.ts";
 
 const O_WRONLY = 0x0001;
@@ -225,6 +226,10 @@ async function main(): Promise<void> {
   const activePids = new Set<number>();
   const descendantPids = new Set<number>();
   const descendantExitStatuses = new Map<number, number>();
+  const guestOutput = createGuestOutput(
+    process.env.KANDELO_GUEST_OUTPUT_FILE,
+  );
+
   const host = new NodeKernelHost({
     maxWorkers: 8,
     execPrograms,
@@ -233,8 +238,10 @@ async function main(): Promise<void> {
     ),
     enableTcpNetwork: process.env.KANDELO_FORMULA_ENABLE_NETWORK === "1",
     rootfsImage,
-    onStdout: (_pid: number, data: Uint8Array) => process.stdout.write(data),
-    onStderr: (_pid: number, data: Uint8Array) => process.stderr.write(data),
+    onStdout: (_pid: number, data: Uint8Array) =>
+      guestOutput.onStdout(data),
+    onStderr: (_pid: number, data: Uint8Array) =>
+      guestOutput.onStderr(data),
     onProcessEvent: (event: ProcessEvent) => {
       // Fork events carry a parent PID and are posted before fork() returns.
       // Ignore the synthetic root spawn so a fast root exit cannot be re-added.
@@ -304,6 +311,7 @@ async function main(): Promise<void> {
     }
   } finally {
     await host.destroy().catch(() => {});
+    guestOutput.close();
   }
 }
 

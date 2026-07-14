@@ -444,8 +444,10 @@ module KandeloFormulaSupport
   # `expected_fork_descendants:` requires exactly that many fork descendants to
   # exit successfully. `expected_fork_descendant_statuses:` instead requires an
   # exact multiset of descendant exit statuses for service teardown paths where
-  # a signal exit is intentional. `expected_status:` permits tests for specified
-  # nonzero results such as a grep no-match status.
+  # a signal exit is intentional. `merge_stderr: true` returns guest fd 1 and fd
+  # 2 in callback order without merging host-runtime diagnostics.
+  # `expected_status:` permits tests for specified nonzero results such as a grep
+  # no-match status.
   def kandelo_run_wasm(
     bin_path, argv, env: {}, stdin: nil, merge_stderr: false, network: false,
     preserve_argv0: false, argv0: nil, exec_programs: {}, guest_files: {},
@@ -480,6 +482,8 @@ module KandeloFormulaSupport
       File.binwrite(staged_wasm, File.binread(wasm_path))
       wasm_path = staged_wasm
     end
+    guest_output_path = merge_stderr ? testpath/".#{wasm_path.basename}.guest-output" : nil
+    FileUtils.rm_f(guest_output_path) if guest_output_path
 
     command = +"cd "
     command << Shellwords.escape(root) << " && "
@@ -507,6 +511,7 @@ module KandeloFormulaSupport
     else
       env.each { |key, value| command << "#{key}=#{Shellwords.escape(value.to_s)} " }
     end
+    command << "KANDELO_GUEST_OUTPUT_FILE=#{Shellwords.escape(guest_output_path.to_s)} " if guest_output_path
     command << "node --experimental-wasm-exnref --import tsx/esm "
     if isolated_runner
       runner = Pathname(__dir__)/"run-network-wasm.ts"
@@ -524,9 +529,25 @@ module KandeloFormulaSupport
       File.binwrite(stdin_path, stdin)
       command << " < #{Shellwords.escape(stdin_path.to_s)}"
     end
-    command << " 2>&1" if merge_stderr
 
-    output = shell_output(command, expected_status)
+    status_matched = false
+    begin
+      output = shell_output(command, expected_status)
+      status_matched = true
+      if guest_output_path
+        # A configured runner writes all guest bytes to the sink. Anything it
+        # writes to process stdout is host-side output and remains observable
+        # on the embedding process's diagnostic stream.
+        $stderr.write(output) unless output.empty?
+        odie "guest output sink was not created: #{guest_output_path}" unless guest_output_path.file?
+        output = guest_output_path.binread
+      end
+    ensure
+      if guest_output_path
+        $stderr.write(guest_output_path.binread) if !status_matched && guest_output_path.file?
+        FileUtils.rm_f(guest_output_path)
+      end
+    end
     kandelo_record_node_execution!(wasm_path, argv)
     output
   end

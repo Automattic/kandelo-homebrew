@@ -96,6 +96,11 @@ with intentional signal-based teardown may instead declare the exact multiset
 of expected descendant statuses. Missing, extra, or unexpected descendants fail
 the test.
 
+Formula assertions that request merged output combine only the guest's stdout
+and stderr callbacks in their original order. Host-runtime and worker
+diagnostics remain on the embedding process's stderr and never become guest
+assertion bytes.
+
 The isolated Node runner used by `kandelo_run_wasm` receives `/bin/sh` from
 Kandelo's reviewed binary resolver. The publisher materializes the wasm32 Dash
 base-system artifact for every target architecture, including wasm64 Formula
