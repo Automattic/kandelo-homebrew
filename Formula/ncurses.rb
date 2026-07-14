@@ -9,7 +9,9 @@ class Ncurses < Formula
   sha256 "136d91bc269a9a5785e5f9e980bc76ab57428f604ce3e5a5a90cebc767971cc6"
   license "X11"
 
+  depends_on "binaryen" => :build
   depends_on "pkgconf" => [:build, :test]
+  depends_on "wabt" => :build
   depends_on "automattic/kandelo-homebrew/libcxx"
 
   skip_clean "bin"
@@ -155,6 +157,9 @@ class Ncurses < Formula
         fallback_source.read.include?("static NCURSES_INT2 xterm_256color_number_data[]")
 
       system "make", jobs
+      %w[clear infocmp tabs tic toe tput tset].each do |program|
+        kandelo_validate_wasm_artifact(buildpath/"progs"/program, fork: :forbidden)
+      end
       system "make", "install"
     end
 
