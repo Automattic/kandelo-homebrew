@@ -27,6 +27,8 @@ Current migration controls and pilots include:
 - `libpng` and `libxml2`, zlib-backed dependency-root libraries;
 - `libzip`, the zlib-backed ZIP library and upstream archive comparison, merge, and inspection tools;
 - `libcxx`, the LLVM C++ standard library, ABI runtime, and bundled unwinder;
+- `icu`, the ICU 74.2 Unicode and globalization libraries with the complete
+  common data archive;
 - `musl-fts`, the BSD hierarchy traversal library for portable archive and filesystem tools;
 - `libcurl`, the TLS, compression, threaded-resolver, and Unix-socket transfer library;
 - `curl`, the matching command-line transfer client linked against the tap library;
