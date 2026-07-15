@@ -102,7 +102,7 @@ CALLER_SPECS = {
     name: "Publish Kandelo bottles",
     event: "publish-kandelo-bottles",
     job: "publish",
-    reusable: "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@main",
+    reusable: "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@b8bdecce9c450f840a64ad072fb8ddb31d8cfcb5",
     inputs: PUBLISH_INPUTS,
   },
   "dry-run" => {
@@ -110,7 +110,7 @@ CALLER_SPECS = {
     name: "Dry run Kandelo bottles",
     event: "dry-run-kandelo-bottles",
     job: "dry-run",
-    reusable: "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@main",
+    reusable: "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@b8bdecce9c450f840a64ad072fb8ddb31d8cfcb5",
     inputs: PUBLISH_INPUTS.merge({
       "kandelo-repository" => expression(
         "github.event.client_payload.kandelo_repository || 'Automattic/kandelo'"
@@ -128,7 +128,7 @@ CALLER_SPECS = {
     name: "Maintain Kandelo bottles",
     event: "maintain-kandelo-bottles",
     job: "maintain",
-    reusable: "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-maintenance.yml@main",
+    reusable: "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-maintenance.yml@b8bdecce9c450f840a64ad072fb8ddb31d8cfcb5",
     inputs: {
       "mode" => expression("github.event.client_payload.mode || 'rebuild'"),
       "formulae" => expression("github.event.client_payload.formulae"),
@@ -384,7 +384,7 @@ def self_test(callers, contract, base_contract)
   expect_rejection("maintenance through the publisher") do
     mutated = deep_copy(callers.fetch("maintenance"))
     mutated.dig("jobs", "maintain")["uses"] =
-      "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@main"
+      "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@b8bdecce9c450f840a64ad072fb8ddb31d8cfcb5"
     check_caller(mutated, CALLER_SPECS.fetch("maintenance"), "maintenance workflow")
   end
   expect_rejection("path-filtered pull-request checks") do
