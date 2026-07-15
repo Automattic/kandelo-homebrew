@@ -34,6 +34,7 @@ Current migration controls and pilots include:
 - `curl`, the matching command-line transfer client linked against the tap library;
 - `ncurses`, the wide-character terminal library and CLI dependency root;
 - `less`, the terminal pager linked against the tap's real ncurses termcap interface;
+- `mandoc`, the manual formatter, viewer, indexer, and search tools with gzip support;
 - `bash`, the GNU interactive shell with real pipelines, subprocesses, and process substitution;
 - `sed`, the GNU stream-editing CLI used by shell and build workflows;
 - `gzip`, the GNU compression CLI with native gunzip and zcat aliases;
