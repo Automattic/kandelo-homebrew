@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "formula": "file-formula",
+  "brewfile": "Kandelo/vfs-acceptance.Brewfile",
+  "executable": "/home/linuxbrew/.linuxbrew/bin/file",
+  "argv": ["file", "-b", "/home/linuxbrew/.linuxbrew/bin/file"],
+  "expected_stdout": "WebAssembly (wasm) binary module"
+}
