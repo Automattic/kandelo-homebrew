@@ -10,7 +10,7 @@ jobs:
       actions: read
       contents: write
       packages: write
-    uses: Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@b8bdecce9c450f840a64ad072fb8ddb31d8cfcb5
+    uses: Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@6efb411f15df83819a4e21a961845084f8860f6c
     with:
       kandelo-repository: Automattic/kandelo
       kandelo-ref: main
@@ -22,3 +22,4 @@ jobs:
       expected-cache-keys: ${{ github.event.client_payload.expected_cache_keys || '' }}
       force: ${{ github.event.client_payload.force || false }}
       dry-run: false
+      require-vfs-acceptance: ${{ github.event.client_payload.require_vfs_acceptance || false }}
