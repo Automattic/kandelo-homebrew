@@ -10,10 +10,6 @@ class Zlib < Formula
   license "Zlib"
   revision 2
 
-  # No bottle block yet: bottles are machine-generated on publish (Track C) via
-  # brew bottle / pr-pull. Until then `brew install` builds from source. A
-  # hand-written placeholder sha would make a default install try to pour a
-  # nonexistent bottle and fail rather than build from source.
   skip_clean "lib/libz.a"
 
   def install
