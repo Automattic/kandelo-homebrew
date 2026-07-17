@@ -83,7 +83,7 @@ def expect_rejection(label)
   check(rejected, "self-test accepted #{label}")
 end
 
-PUBLISH_INPUTS = {
+BASE_PUBLISH_INPUTS = {
   "kandelo-repository" => "Automattic/kandelo",
   "kandelo-ref" => "main",
   "tap-repository" => "Automattic/kandelo-homebrew",
@@ -96,11 +96,11 @@ PUBLISH_INPUTS = {
   "dry-run" => false,
 }.freeze
 
-CURRENT_KANDELO_WORKFLOW_SHA = "b8bdecce9c450f840a64ad072fb8ddb31d8cfcb5"
-# Exact rebase-merged Kandelo commit that owns the next complete publisher and
-# maintenance workflow generation, including opt-in VFS acceptance.
-NEXT_KANDELO_WORKFLOW_SHA = "6efb411f15df83819a4e21a961845084f8860f6c"
-SELF_TEST_KANDELO_WORKFLOW_SHA = "1111111111111111111111111111111111111111"
+ACTIVE_KANDELO_WORKFLOW_SHA = "6efb411f15df83819a4e21a961845084f8860f6c"
+# Negative fixtures prove that the former generation and an arbitrary immutable
+# commit cannot regain publisher authority.
+RETIRED_KANDELO_WORKFLOW_SHA = "b8bdecce9c450f840a64ad072fb8ddb31d8cfcb5"
+ARBITRARY_KANDELO_WORKFLOW_SHA = "1111111111111111111111111111111111111111"
 
 CALLER_SPECS = {
   "publish" => {
@@ -108,16 +108,20 @@ CALLER_SPECS = {
     name: "Publish Kandelo bottles",
     event: "publish-kandelo-bottles",
     job: "publish",
-    reusable: "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@#{CURRENT_KANDELO_WORKFLOW_SHA}",
-    inputs: PUBLISH_INPUTS,
+    reusable: "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@#{ACTIVE_KANDELO_WORKFLOW_SHA}",
+    inputs: BASE_PUBLISH_INPUTS.merge({
+      "require-vfs-acceptance" => expression(
+        "github.event.client_payload.require_vfs_acceptance || false"
+      ),
+    }).freeze,
   },
   "dry-run" => {
     path: File.join(WORKFLOW_ROOT, "dry-run-bottles.yml"),
     name: "Dry run Kandelo bottles",
     event: "dry-run-kandelo-bottles",
     job: "dry-run",
-    reusable: "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@#{CURRENT_KANDELO_WORKFLOW_SHA}",
-    inputs: PUBLISH_INPUTS.merge({
+    reusable: "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@#{ACTIVE_KANDELO_WORKFLOW_SHA}",
+    inputs: BASE_PUBLISH_INPUTS.merge({
       "kandelo-repository" => expression(
         "github.event.client_payload.kandelo_repository || 'Automattic/kandelo'"
       ),
@@ -134,7 +138,7 @@ CALLER_SPECS = {
     name: "Maintain Kandelo bottles",
     event: "maintain-kandelo-bottles",
     job: "maintain",
-    reusable: "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-maintenance.yml@#{CURRENT_KANDELO_WORKFLOW_SHA}",
+    reusable: "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-maintenance.yml@#{ACTIVE_KANDELO_WORKFLOW_SHA}",
     inputs: {
       "mode" => expression("github.event.client_payload.mode || 'rebuild'"),
       "formulae" => expression("github.event.client_payload.formulae"),
@@ -153,32 +157,6 @@ CALLER_SPECS = {
     }.freeze,
   },
 }.freeze
-
-def next_caller_specs(kandelo_sha)
-  specs = deep_copy(CALLER_SPECS)
-  specs.fetch("publish")[:reusable] =
-    "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@#{kandelo_sha}"
-  specs.fetch("publish")[:inputs] = PUBLISH_INPUTS.merge({
-    "require-vfs-acceptance" => expression(
-      "github.event.client_payload.require_vfs_acceptance || false"
-    ),
-  }).freeze
-  specs.fetch("dry-run")[:reusable] =
-    "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@#{kandelo_sha}"
-  specs.fetch("maintenance")[:reusable] =
-    "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-maintenance.yml@#{kandelo_sha}"
-  specs.freeze
-end
-
-caller_profiles = {
-  # Keep the current profile during the parser-first rollout. Remove it after
-  # every caller has moved to the reviewed next pin.
-  "current" => CALLER_SPECS,
-}
-if NEXT_KANDELO_WORKFLOW_SHA
-  caller_profiles["next"] = next_caller_specs(NEXT_KANDELO_WORKFLOW_SHA)
-end
-CALLER_PROFILES = caller_profiles.freeze
 
 BASE_MATERIALIZE_RUN = <<~'BASH'
   set -euo pipefail
@@ -279,34 +257,17 @@ def check_caller(workflow, spec, label)
   end
 end
 
-def caller_profile_errors(callers, specs)
-  errors = []
-  specs.each do |key, spec|
-    begin
-      check_caller(callers.fetch(key), spec, "#{key} workflow")
-    rescue KeyError, RuntimeError => e
-      errors << "#{key}: #{e.message}"
-    end
+def check_caller_set(callers)
+  CALLER_SPECS.each do |key, spec|
+    check_caller(callers.fetch(key), spec, "#{key} workflow")
   end
-  errors
 end
 
-def check_caller_profile(callers, profiles = CALLER_PROFILES)
-  results = profiles.to_h do |name, specs|
-    [name, caller_profile_errors(callers, specs)]
-  end
-  matches = results.select { |_name, errors| errors.empty? }.keys
-  details = results.map { |name, errors| "#{name}=[#{errors.join('; ')}]" }.join(", ")
-  check(matches.length == 1, "caller set does not match one exact profile: #{details}")
-  matches.fetch(0)
-end
-
-def callers_for_specs(callers, specs)
+def callers_pinned_to(callers, kandelo_sha)
   result = deep_copy(callers)
-  specs.each do |key, spec|
+  CALLER_SPECS.each do |key, spec|
     job = result.fetch(key).fetch("jobs").fetch(spec.fetch(:job))
-    job["uses"] = spec.fetch(:reusable)
-    job["with"] = spec.fetch(:inputs)
+    job["uses"] = job.fetch("uses").sub(ACTIVE_KANDELO_WORKFLOW_SHA, kandelo_sha)
   end
   result
 end
@@ -405,65 +366,56 @@ def check_base_contract_workflow(workflow)
 end
 
 def self_test(callers, contract, base_contract)
-  next_sha = NEXT_KANDELO_WORKFLOW_SHA || SELF_TEST_KANDELO_WORKFLOW_SHA
-  next_specs = next_caller_specs(next_sha)
-  test_profiles = { "current" => CALLER_SPECS, "next" => next_specs }
-  current_callers = callers_for_specs(callers, CALLER_SPECS)
-  next_callers = callers_for_specs(callers, next_specs)
-  check(check_caller_profile(current_callers, test_profiles) == "current",
-        "current caller profile was not selected")
-  check(check_caller_profile(next_callers, test_profiles) == "next",
-        "next caller profile was not selected")
+  check_caller_set(callers)
 
-  expect_rejection("mixed current and next caller generations") do
-    mutated = deep_copy(current_callers)
-    mutated["publish"] = deep_copy(next_callers.fetch("publish"))
-    check_caller_profile(mutated, test_profiles)
+  rollback_callers = callers_pinned_to(callers, RETIRED_KANDELO_WORKFLOW_SHA)
+  rollback_callers.dig("publish", "jobs", "publish", "with")
+                  .delete("require-vfs-acceptance")
+  expect_rejection("the former complete caller generation") do
+    check_caller_set(rollback_callers)
+  end
+  expect_rejection("mixed active and former caller generations") do
+    mutated = deep_copy(callers)
+    mutated["maintenance"] = deep_copy(rollback_callers.fetch("maintenance"))
+    check_caller_set(mutated)
   end
   expect_rejection("an arbitrary immutable Kandelo workflow pin") do
-    mutated = deep_copy(next_callers)
-    alternate_last = next_sha.end_with?("0") ? "1" : "0"
-    alternate_sha = next_sha.sub(/.\z/, alternate_last)
-    next_specs.each do |key, spec|
-      job = mutated.fetch(key).fetch("jobs").fetch(spec.fetch(:job))
-      job["uses"] = job.fetch("uses").sub(next_sha, alternate_sha)
-    end
-    check_caller_profile(mutated, test_profiles)
+    check_caller_set(callers_pinned_to(callers, ARBITRARY_KANDELO_WORKFLOW_SHA))
   end
-  expect_rejection("the next publisher without VFS acceptance mapping") do
-    mutated = deep_copy(next_callers)
+  expect_rejection("the active publisher without VFS acceptance mapping") do
+    mutated = deep_copy(callers)
     mutated.dig("publish", "jobs", "publish", "with").delete("require-vfs-acceptance")
-    check_caller_profile(mutated, test_profiles)
+    check_caller_set(mutated)
   end
   expect_rejection("a changed VFS acceptance mapping") do
-    mutated = deep_copy(next_callers)
+    mutated = deep_copy(callers)
     mutated.dig("publish", "jobs", "publish", "with")["require-vfs-acceptance"] =
       expression("github.event.client_payload.require_vfs_acceptance")
-    check_caller_profile(mutated, test_profiles)
+    check_caller_set(mutated)
   end
-  expect_rejection("VFS acceptance mapping on the current publisher") do
-    mutated = deep_copy(current_callers)
-    mutated.dig("publish", "jobs", "publish", "with")["require-vfs-acceptance"] =
+  expect_rejection("VFS acceptance mapping on the dry-run caller") do
+    mutated = deep_copy(callers)
+    mutated.dig("dry-run", "jobs", "dry-run", "with")["require-vfs-acceptance"] =
       expression("github.event.client_payload.require_vfs_acceptance || false")
-    check_caller_profile(mutated)
+    check_caller_set(mutated)
   end
   expect_rejection("caller-local environment configuration") do
-    mutated = deep_copy(current_callers.fetch("dry-run"))
+    mutated = deep_copy(callers.fetch("dry-run"))
     mutated["env"] = { "BASH_ENV" => "/tmp/untrusted" }
     check_caller(mutated, CALLER_SPECS.fetch("dry-run"), "dry-run workflow")
   end
   expect_rejection("caller-local executable steps") do
-    mutated = deep_copy(current_callers.fetch("dry-run"))
+    mutated = deep_copy(callers.fetch("dry-run"))
     mutated.dig("jobs", "dry-run")["steps"] = [{ "run" => "true" }]
     check_caller(mutated, CALLER_SPECS.fetch("dry-run"), "dry-run workflow")
   end
   expect_rejection("secret inheritance") do
-    mutated = deep_copy(current_callers.fetch("publish"))
+    mutated = deep_copy(callers.fetch("publish"))
     mutated.dig("jobs", "publish")["secrets"] = "inherit"
     check_caller(mutated, CALLER_SPECS.fetch("publish"), "publish workflow")
   end
   expect_rejection("an extra privileged job") do
-    mutated = deep_copy(current_callers.fetch("publish"))
+    mutated = deep_copy(callers.fetch("publish"))
     mutated.fetch("jobs")["backdoor"] = {
       "permissions" => { "contents" => "write" },
       "uses" => "owner/repo/.github/workflows/publish.yml@main",
@@ -471,26 +423,26 @@ def self_test(callers, contract, base_contract)
     check_caller(mutated, CALLER_SPECS.fetch("publish"), "publish workflow")
   end
   expect_rejection("a mutable publisher target") do
-    mutated = deep_copy(current_callers.fetch("publish"))
+    mutated = deep_copy(callers.fetch("publish"))
     mutated.dig("jobs", "publish")["uses"] =
       "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@feature"
     check_caller(mutated, CALLER_SPECS.fetch("publish"), "publish workflow")
   end
   expect_rejection("an executable publish ref from event data") do
-    mutated = deep_copy(current_callers.fetch("publish"))
+    mutated = deep_copy(callers.fetch("publish"))
     mutated.dig("jobs", "publish", "with")["tap-ref"] =
       expression("github.event.client_payload.tap_ref")
     check_caller(mutated, CALLER_SPECS.fetch("publish"), "publish workflow")
   end
   expect_rejection("dry-run publication") do
-    mutated = deep_copy(current_callers.fetch("dry-run"))
+    mutated = deep_copy(callers.fetch("dry-run"))
     mutated.dig("jobs", "dry-run", "with")["dry-run"] = false
     check_caller(mutated, CALLER_SPECS.fetch("dry-run"), "dry-run workflow")
   end
   expect_rejection("maintenance through the publisher") do
-    mutated = deep_copy(current_callers.fetch("maintenance"))
+    mutated = deep_copy(callers.fetch("maintenance"))
     mutated.dig("jobs", "maintain")["uses"] =
-      "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@b8bdecce9c450f840a64ad072fb8ddb31d8cfcb5"
+      "Automattic/kandelo/.github/workflows/reusable-homebrew-bottle-publish.yml@#{ACTIVE_KANDELO_WORKFLOW_SHA}"
     check_caller(mutated, CALLER_SPECS.fetch("maintenance"), "maintenance workflow")
   end
   expect_rejection("path-filtered pull-request checks") do
@@ -546,14 +498,8 @@ end
 
 begin
   check_workflow_file_set
-  check(CURRENT_KANDELO_WORKFLOW_SHA.match?(/\A[0-9a-f]{40}\z/),
-        "current Kandelo workflow pin is not an exact SHA")
-  if NEXT_KANDELO_WORKFLOW_SHA
-    check(NEXT_KANDELO_WORKFLOW_SHA.match?(/\A[0-9a-f]{40}\z/),
-          "next Kandelo workflow pin is not an exact SHA")
-    check(CURRENT_KANDELO_WORKFLOW_SHA != NEXT_KANDELO_WORKFLOW_SHA,
-          "current and next Kandelo workflow pins must differ")
-  end
+  check(ACTIVE_KANDELO_WORKFLOW_SHA.match?(/\A[0-9a-f]{40}\z/),
+        "active Kandelo workflow pin is not an exact SHA")
   callers = CALLER_SPECS.to_h do |key, spec|
     [key, load_workflow(spec.fetch(:path))]
   end
@@ -561,7 +507,7 @@ begin
   base_contract = load_workflow(BASE_CONTRACT_PATH)
 
   self_test(callers, contract, base_contract)
-  check_caller_profile(callers)
+  check_caller_set(callers)
   check_contract_workflow(contract)
   check_base_contract_workflow(base_contract)
   puts "test-workflow-trust.rb: ok"
