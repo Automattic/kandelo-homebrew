@@ -3,6 +3,18 @@ export interface ExpectedForkDescendants {
   statusCounts: ReadonlyMap<number, number>;
 }
 
+export interface ProcessEvent {
+  kind: "spawn" | "exec" | "exit";
+  pid: number;
+  ppid?: number;
+  exitStatus?: number;
+}
+
+export interface ForkDescendantTracker {
+  onProcessEvent(event: ProcessEvent): void;
+  waitFor(expected: ExpectedForkDescendants, deadline: number): Promise<void>;
+}
+
 function validateExitStatus(status: unknown, index: number): number {
   if (
     !Number.isInteger(status) ||
@@ -109,4 +121,45 @@ export function validateForkDescendantStatuses(
         `processes ${observed || "none"}`,
     );
   }
+}
+
+export function createForkDescendantTracker(): ForkDescendantTracker {
+  const activePids = new Set<number>();
+  const descendantPids = new Set<number>();
+  const descendantExitStatuses = new Map<number, number>();
+
+  return {
+    onProcessEvent(event: ProcessEvent): void {
+      // Fork events carry a parent PID and are posted before fork() returns.
+      // Ignore the synthetic root spawn so a fast root exit cannot be re-added.
+      if (event.kind === "spawn" && event.ppid !== undefined) {
+        activePids.add(event.pid);
+        descendantPids.add(event.pid);
+      } else if (event.kind === "exit" && descendantPids.has(event.pid)) {
+        activePids.delete(event.pid);
+        descendantExitStatuses.set(event.pid, event.exitStatus ?? -1);
+      }
+    },
+
+    async waitFor(
+      expected: ExpectedForkDescendants,
+      deadline: number,
+    ): Promise<void> {
+      while (activePids.size > 0) {
+        if (Date.now() >= deadline) {
+          throw new Error(
+            `timed out waiting for ${expected.count} fork descendant(s); ` +
+              `observed ${descendantPids.size}, active ${[...activePids].join(",") || "none"}`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      validateForkDescendantStatuses(
+        expected,
+        descendantPids,
+        descendantExitStatuses,
+      );
+    },
+  };
 }

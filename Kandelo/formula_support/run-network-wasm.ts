@@ -4,9 +4,8 @@ import { pathToFileURL } from "node:url";
 
 import { addDefaultBaseExecPrograms } from "./base-exec-programs.ts";
 import {
-  type ExpectedForkDescendants,
+  createForkDescendantTracker,
   parseExpectedForkDescendants,
-  validateForkDescendantStatuses,
 } from "./fork-descendant-statuses.ts";
 import { createGuestOutput } from "./guest-output.ts";
 import { rootfsSizeForStagedBytes, validateGuestPath } from "./rootfs-size.ts";
@@ -28,36 +27,6 @@ interface WritableRootfs {
     length: number,
   ): number;
   close(fd: number): void;
-}
-
-interface ProcessEvent {
-  kind: "spawn" | "exec" | "exit";
-  pid: number;
-  ppid?: number;
-  exitStatus?: number;
-}
-
-async function waitForForkDescendants(
-  expected: ExpectedForkDescendants,
-  activePids: Set<number>,
-  descendantPids: Set<number>,
-  descendantExitStatuses: Map<number, number>,
-  deadline: number,
-): Promise<void> {
-  while (activePids.size > 0) {
-    if (Date.now() >= deadline) {
-      throw new Error(
-        `timed out waiting for ${expected.count} fork descendant(s); ` +
-          `observed ${descendantPids.size}, active ${[...activePids].join(",") || "none"}`,
-      );
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  validateForkDescendantStatuses(
-    expected,
-    descendantPids,
-    descendantExitStatuses,
-  );
 }
 
 function writeGuestFile(
@@ -223,9 +192,7 @@ async function main(): Promise<void> {
     writeGuestFile(rootfs, entry.guestPath, entry.bytes, entry.mode);
   }
   const rootfsImage = await rootfs.saveImage();
-  const activePids = new Set<number>();
-  const descendantPids = new Set<number>();
-  const descendantExitStatuses = new Map<number, number>();
+  const forkDescendants = createForkDescendantTracker();
   const guestOutput = createGuestOutput(
     process.env.KANDELO_GUEST_OUTPUT_FILE,
   );
@@ -242,19 +209,7 @@ async function main(): Promise<void> {
       guestOutput.onStdout(data),
     onStderr: (_pid: number, data: Uint8Array) =>
       guestOutput.onStderr(data),
-    onProcessEvent: (event: ProcessEvent) => {
-      // Fork events carry a parent PID and are posted before fork() returns.
-      // Ignore the synthetic root spawn so a fast root exit cannot be re-added.
-      if (event.kind === "spawn" && event.ppid !== undefined) {
-        activePids.add(event.pid);
-        descendantPids.add(event.pid);
-      } else if (event.kind === "exit") {
-        if (descendantPids.has(event.pid)) {
-          activePids.delete(event.pid);
-          descendantExitStatuses.set(event.pid, event.exitStatus ?? -1);
-        }
-      }
-    },
+    onProcessEvent: forkDescendants.onProcessEvent,
   });
 
   try {
@@ -296,13 +251,7 @@ async function main(): Promise<void> {
       process.exitCode = status;
       if (status === 0 && expectedForkDescendants.count > 0) {
         await Promise.race([
-          waitForForkDescendants(
-            expectedForkDescendants,
-            activePids,
-            descendantPids,
-            descendantExitStatuses,
-            deadline,
-          ),
+          forkDescendants.waitFor(expectedForkDescendants, deadline),
           timeout,
         ]);
       }

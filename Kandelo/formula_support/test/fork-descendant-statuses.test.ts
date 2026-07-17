@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createForkDescendantTracker,
   parseExpectedForkDescendants,
   validateForkDescendantStatuses,
 } from "../fork-descendant-statuses.ts";
@@ -94,5 +95,32 @@ test("rejects missing, extra, and unexpected descendant statuses", () => {
         ]),
       ),
     /status mismatch.*139: expected 0, observed 1.*143: expected 1, observed 0/,
+  );
+});
+
+test("tracks fork spawns through their exit before validating", async () => {
+  const expected = parseExpectedForkDescendants("1", undefined);
+  const tracker = createForkDescendantTracker();
+
+  tracker.onProcessEvent({ kind: "spawn", pid: 100 });
+  tracker.onProcessEvent({ kind: "spawn", pid: 101, ppid: 100 });
+  tracker.onProcessEvent({ kind: "exec", pid: 101 });
+  const waiting = tracker.waitFor(expected, Date.now() + 1_000);
+  setTimeout(
+    () => tracker.onProcessEvent({ kind: "exit", pid: 101, exitStatus: 0 }),
+    0,
+  );
+
+  await assert.doesNotReject(waiting);
+});
+
+test("bounds the wait while an observed descendant remains active", async () => {
+  const expected = parseExpectedForkDescendants("1", undefined);
+  const tracker = createForkDescendantTracker();
+  tracker.onProcessEvent({ kind: "spawn", pid: 101, ppid: 100 });
+
+  await assert.rejects(
+    tracker.waitFor(expected, Date.now()),
+    /timed out waiting for 1 fork descendant\(s\); observed 1, active 101/,
   );
 });
