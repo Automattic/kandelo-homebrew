@@ -1123,7 +1123,8 @@ class KandeloFormulaSupportTest < Minitest::Test
         guest_files:                { "/etc/program.conf" => "/formula/program.conf" },
         guest_directories:          ["/home/linuxbrew/.linuxbrew/var/program/save"],
         writable_guest_directories: ["/home/linuxbrew/.linuxbrew/var/program"],
-        writable_host_directories:  { "/work" => "/formula/test output" }
+        writable_host_directories:  { "/work" => "/formula/test output" },
+        expected_fork_descendants:  2
       )
 
       assert_equal "runtime-ok\n", output
@@ -1142,8 +1143,26 @@ class KandeloFormulaSupportTest < Minitest::Test
       assert_includes harness.command, "/work"
       assert_includes harness.command, "/formula/test\\ output"
       assert_includes harness.command, "program.wasm"
+      config_assignment = Shellwords.shellsplit(harness.command).find do |token|
+        token.start_with?("KANDELO_FORMULA_PTY_CONFIG_JSON=")
+      end
+      refute_nil config_assignment
+      config = JSON.parse(config_assignment.delete_prefix("KANDELO_FORMULA_PTY_CONFIG_JSON="))
+      assert_equal 2, config.fetch("expectedForkDescendants")
       assert_equal "kandelo_run_pty_wasm", harness.recorded_launcher
       refute_path_exists host_dist
+    end
+  end
+
+  def test_pty_execution_rejects_invalid_expected_fork_descendant_count
+    [-1, 1.5, "1", nil].each do |count|
+      error = assert_raises(RuntimeError) do
+        Harness.new.kandelo_run_pty_wasm(
+          "program.wasm", [], inputs: [], expected_fork_descendants: count
+        )
+      end
+
+      assert_includes error.message, "expected fork descendant count must be a nonnegative integer"
     end
   end
 

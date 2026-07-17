@@ -10,6 +10,11 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import {
+  createForkDescendantTracker,
+  parseExpectedForkDescendants,
+  type ProcessEvent,
+} from "./fork-descendant-statuses.ts";
 import { rootfsSizeForStagedBytes, validateGuestPath } from "./rootfs-size.ts";
 
 const O_WRONLY = 0x0001;
@@ -32,6 +37,7 @@ interface PtyConfig {
   inputDelayMs: number;
   cols: number;
   rows: number;
+  expectedForkDescendants?: number;
 }
 
 interface WritableRootfs {
@@ -120,6 +126,10 @@ async function main(): Promise<void> {
   if (config.rerunInputs != null && !Array.isArray(config.rerunInputs)) {
     throw new Error("rerunInputs must be an array when present");
   }
+  const expectedForkDescendants = parseExpectedForkDescendants(
+    String(config.expectedForkDescendants ?? 0),
+    undefined,
+  );
 
   const configuredArgv0 = config.argv0 ?? undefined;
   if (configuredArgv0 !== undefined) validateGuestPath(configuredArgv0, []);
@@ -371,6 +381,7 @@ async function main(): Promise<void> {
       }
     }
 
+    let forkDescendants = createForkDescendantTracker();
     const host = new NodeKernelHost({
       maxWorkers: 4,
       execPrograms,
@@ -379,6 +390,8 @@ async function main(): Promise<void> {
       onPtyOutput: (_pid: number, data: Uint8Array) =>
         process.stdout.write(data),
       onStderr: (_pid: number, data: Uint8Array) => process.stderr.write(data),
+      onProcessEvent: (event: ProcessEvent) =>
+        forkDescendants.onProcessEvent(event),
     });
 
     try {
@@ -388,6 +401,8 @@ async function main(): Promise<void> {
         10,
       );
       const run = async (inputs: string[]): Promise<number> => {
+        forkDescendants = createForkDescendantTracker();
+        const deadline = Date.now() + timeoutMs;
         const exit = host.spawn(program, [argv0, ...args], {
           cwd: guestEnv.KERNEL_CWD ?? (rootfsImage ? "/" : process.cwd()),
           env,
@@ -410,7 +425,14 @@ async function main(): Promise<void> {
           );
         });
         try {
-          return await Promise.race([exit, timeout]);
+          const status = await Promise.race([exit, timeout]);
+          if (status === 0 && expectedForkDescendants.count > 0) {
+            await Promise.race([
+              forkDescendants.waitFor(expectedForkDescendants, deadline),
+              timeout,
+            ]);
+          }
+          return status;
         } finally {
           if (timer) clearTimeout(timer);
         }
