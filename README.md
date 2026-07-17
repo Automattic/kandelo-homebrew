@@ -71,6 +71,7 @@ Current migration controls and pilots include:
 - `coreutils`, the GNU filesystem, text, checksum, and shell utility suite.
 - `diffutils`, GNU `diff`, `cmp`, `diff3`, and `sdiff` file-comparison tools.
 - `findutils`, GNU filesystem traversal and argument-driven process execution.
+- `vim`, the ncurses-backed editor, Ex mode, runtime, and `xxd` tools.
 
 The SDK is not yet a Homebrew dependency. Trusted builds supply an
 `HOMEBREW_KANDELO_ROOT` checkout containing the SDK, sysroot, kernel, and Node
