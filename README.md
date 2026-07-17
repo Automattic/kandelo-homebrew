@@ -43,6 +43,7 @@ Current migration controls and pilots include:
 - `dash`, the dependency-free POSIX shell with instrumented subprocess support;
 - `make`, GNU dependency-driven build automation using the tap's POSIX shell;
 - `ed`, the conforming line editor and restricted editor required by patch workflows;
+- `patch`, GNU's real multi-format file transformation utility replacing the compact metadata scanner;
 - `asa`, FreeBSD's POSIX carriage-control translator for FORTRAN output;
 - `m4`, the GNU macro processor with process-executing builtins backed by the tap's Dash shell;
 - `gawk`, GNU's pattern scanning and text-processing language;
