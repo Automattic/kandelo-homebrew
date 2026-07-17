@@ -147,6 +147,7 @@ class Bzip2 < Formula
       assert_equal opt_prefix.to_s,
         Utils.safe_popen_read(pkgconf, "--variable=prefix", "bzip2").strip
       flags = Utils.safe_popen_read(pkgconf, "--static", "--cflags", "--libs", "bzip2").split
+      assert_includes flags, "-L#{opt_lib}"
       assert_includes flags, "-lbz2"
       system kandelo_cc, source, *flags, "-o", wasm
       system kandelo_cc, "-shared", "-fPIC", plugin_source, *flags, "-o", plugin

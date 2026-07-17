@@ -148,6 +148,7 @@ class Xz < Formula
       assert_equal opt_prefix.to_s,
         Utils.safe_popen_read(pkgconf, "--variable=prefix", "liblzma").strip
       flags = Utils.safe_popen_read(pkgconf, "--static", "--cflags", "--libs", "liblzma").split
+      assert_includes flags, "-L#{opt_lib}"
       assert_includes flags, "-llzma"
       assert_includes flags, "-pthread"
       assert_includes flags, "-lpthread"

@@ -120,9 +120,9 @@ module KandeloFormulaSupport
     root
   end
 
-  # Export the wasm cross-compile sysroot/glue env and clear host include vars
-  # that would otherwise leak macOS/Xcode headers into a wasm compile. Used by
-  # `test do` blocks that compile a smoke program against a library keg.
+  # Export the wasm cross-compile sysroot/glue env and clear host compiler
+  # search paths that would otherwise leak native headers or libraries into a
+  # wasm compile. Used by `test do` blocks that compile against a library keg.
   def kandelo_activate_sysroot!(root = kandelo_require_root!)
     sysroot = (kandelo_arch == "wasm64") ? "sysroot64" : "sysroot"
     ENV["WASM_POSIX_SYSROOT"] = "#{root}/#{sysroot}"
@@ -133,6 +133,8 @@ module KandeloFormulaSupport
       CPATH
       C_INCLUDE_PATH
       CPLUS_INCLUDE_PATH
+      LD_RUN_PATH
+      LIBRARY_PATH
       OBJC_INCLUDE_PATH
     ].each { |key| ENV.delete(key) }
     root
