@@ -99,6 +99,13 @@ undeclared, global, and mutable `opt` paths are never included. Formulae retain
 ownership of `PKG_CONFIG_PATH`, which selects and orders the target `.pc`
 directories the SDK may use.
 
+Sysroot activation removes host `LIBRARY_PATH` before target compilation.
+Otherwise pkgconf can classify a Kandelo dependency's library directory as a
+native system path and remove its required `-L` flag. It also removes
+`LD_RUN_PATH` so the native linker's implicit runtime search state cannot enter
+the target build. The scoped Formula build helper restores the caller's
+environment afterward.
+
 Formula tests that fork process trees declare the exact descendant count. The
 default contract requires every descendant to exit successfully; service tests
 with intentional signal-based teardown may instead declare the exact multiset

@@ -554,6 +554,8 @@ class KandeloFormulaSupportTest < Minitest::Test
       CMAKE_PROGRAM_PATH
     ]
     cmake_search_variables.each { |key| ENV[key] = "/prefix" }
+    ENV["LIBRARY_PATH"] = "/prefix/opt/xz/lib"
+    ENV["LD_RUN_PATH"] = "/prefix/opt/xz/lib"
     scoped = ENV.to_hash
 
     build_environment = nil
@@ -561,7 +563,24 @@ class KandeloFormulaSupportTest < Minitest::Test
 
     refute_includes build_environment.fetch("PATH").split(File::PATH_SEPARATOR), "/prefix/bin"
     cmake_search_variables.each { |key| refute build_environment.key?(key) }
+    refute build_environment.key?("LIBRARY_PATH")
+    refute build_environment.key?("LD_RUN_PATH")
     assert_equal scoped, ENV.to_hash
+  ensure
+    ENV.replace(original) if original
+  end
+
+  def test_sysroot_activation_clears_host_linker_search_paths
+    harness = Harness.new
+    original = ENV.to_hash
+    ENV["LIBRARY_PATH"] = "/prefix/opt/xz/lib"
+    ENV["LD_RUN_PATH"] = "/prefix/opt/xz/lib"
+
+    harness.kandelo_activate_sysroot!("/tmp/kandelo-root")
+
+    refute ENV.key?("LIBRARY_PATH")
+    refute ENV.key?("LD_RUN_PATH")
+    assert_equal "/tmp/kandelo-root/sysroot", ENV.fetch("WASM_POSIX_SYSROOT")
   ensure
     ENV.replace(original) if original
   end
