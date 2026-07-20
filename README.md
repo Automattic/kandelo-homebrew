@@ -1,13 +1,14 @@
-# Kandelo Homebrew Tap
+# Legacy Kandelo Homebrew Tap (Retired)
 
-This repository is Kandelo's first-party Homebrew tap. It owns Formula source,
-Kandelo-specific Formula support, generated bottle blocks, and publication
-evidence. The `Automattic/kandelo` repository owns the kernel, host runtime,
-SDK, package-build infrastructure, and trusted publisher.
+This repository is a retired snapshot of Kandelo's original Homebrew tap. The
+public first-party tap and all active bottle publication now live in
+[`Kandelo-dev/homebrew-tap-core`](https://github.com/Kandelo-dev/homebrew-tap-core).
+Files here remain available only as migration history; they are not an active
+package source or publication authority.
 
-The tap is still experimental. Do not publish user-facing `brew tap` or
-`brew install` instructions until a stock guest Homebrew install has been
-validated inside Kandelo.
+The technical notes below describe the legacy implementation at retirement.
+They are retained for historical review and are not current operator
+instructions.
 
 ## Formulae
 
@@ -16,7 +17,7 @@ upstream source through Kandelo's worktree-local SDK. Shared cross-compilation
 and runtime-test mechanics live in
 `Kandelo/formula_support/kandelo_formula_support.rb`.
 
-Current migration controls and pilots include:
+Retained migration controls and pilots include:
 
 - `hello`, the original publication control;
 - `zlib` and `ruby`, the first dependency and heavy-runtime Formulae;
@@ -126,67 +127,13 @@ exercise another shell.
 
 ## Publication State
 
-Bottle metadata must be generated from the same trusted build that produces
-the bottle bytes. Do not hand-write placeholder hashes or reuse bottle data
-across Kandelo ABI versions. The existing `hello` sidecar files are historical
-publication evidence; broader publication is gated on the native Homebrew OCI
-publisher and real guest-install validation in `Automattic/kandelo`.
+This repository cannot publish, dry-run, rebuild, roll back, or delete Kandelo
+bottles. Its former `repository_dispatch` callers have been removed. The only
+remaining Actions workflows are read-only checks that keep that retired state
+fail-closed: they reject dispatch entry points, reusable-workflow jobs, package
+permissions, secrets, and any unreviewed workflow-file additions.
 
-Bottle operations use `repository_dispatch`, so GitHub always loads the small
-caller workflow from tap `main`. These tap workflows contain no shell steps or
-other executable logic. They pass request data to the reviewed reusable
-publisher and maintenance workflows in `Automattic/kandelo`, which validate the
-request and own the build, credential isolation, artifact verification, and tap
-finalization logic.
-
-A dry run may select unmerged Formula or Kandelo code through event payload
-repositories and refs:
-
-```bash
-gh api --method POST repos/Automattic/kandelo-homebrew/dispatches \
-  -f event_type=dry-run-kandelo-bottles \
-  -f 'client_payload[formulae]=bzip2,xz' \
-  -f 'client_payload[arches]=wasm32' \
-  -f 'client_payload[tap_ref]=main' \
-  -f 'client_payload[kandelo_ref]=main'
-```
-
-Replace `main` with a reviewed branch name or exact commit SHA when the dry run
-needs to execute unmerged tap or Kandelo code. The repositories and refs are
-data passed to the publisher; they never select the dispatch workflow
-definition. The caller grants the reusable workflow's maximum permission
-ceiling because a called workflow cannot elevate caller authority. The reusable
-workflow narrows each scheduled job, and a dry run never schedules its bottle
-upload or tap-finalization jobs.
-
-Write publication accepts formulae, arches, and an optional release tag, but
-hardcodes both executable repositories to reviewed `main`:
-
-```bash
-gh api --method POST repos/Automattic/kandelo-homebrew/dispatches \
-  -f event_type=publish-kandelo-bottles \
-  -f 'client_payload[formulae]=bzip2,xz' \
-  -f 'client_payload[arches]=wasm32'
-```
-
-Dry runs cannot publish bottle blobs or sidecar commits. They may upload
-run-scoped diagnostic artifacts, but later write-capable bottle jobs do not
-restore state produced by an untrusted dry run.
-
-Rebuild and rollback maintenance uses a separate reviewed entry point. Rebuilds
-may provide expected cache keys and may explicitly force work that current
-metadata would otherwise skip. Rollbacks preserve the last-green metadata and
-record the reason; deleting a package additionally requires its URL and an
-operational reason.
-
-```bash
-gh api --method POST repos/Automattic/kandelo-homebrew/dispatches \
-  -f event_type=maintain-kandelo-bottles \
-  -f 'client_payload[mode]=rebuild' \
-  -f 'client_payload[formulae]=bzip2,xz' \
-  -f 'client_payload[arches]=wasm32'
-```
-
-Formula Ruby and Homebrew bottle metadata remain authoritative for Homebrew.
-Files under `Kandelo/` are additive validation and provenance data and must not
-be required for a stock guest install.
+Do not send bottle dispatches to this repository. Use the workflows and
+operator documentation in `Kandelo-dev/homebrew-tap-core` instead. Existing
+Formulae, sidecars, and package data are retained as historical evidence; this
+retirement does not delete package data.

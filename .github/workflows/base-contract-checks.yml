@@ -1,4 +1,4 @@
-name: Base-controlled tap contract checks
+name: Base-controlled retired tap checks
 
 on:
   pull_request_target:
@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  publisher-trust-base:
+  retired-tap-trust-base:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -18,7 +18,7 @@ jobs:
       - uses: ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9 # v1
         with:
           ruby-version: "3.4"
-      - name: Materialize candidate contracts as inert data
+      - name: Materialize candidate trust shell as inert data
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -47,10 +47,7 @@ jobs:
               select(.type != "tree") |
               {path, mode, type}] | sort_by(.path)) == [
                 {path: ".github/workflows/base-contract-checks.yml", mode: "100644", type: "blob"},
-                {path: ".github/workflows/contract-checks.yml", mode: "100644", type: "blob"},
-                {path: ".github/workflows/dry-run-bottles.yml", mode: "100644", type: "blob"},
-                {path: ".github/workflows/maintain-bottles.yml", mode: "100644", type: "blob"},
-                {path: ".github/workflows/publish-bottles.yml", mode: "100644", type: "blob"}
+                {path: ".github/workflows/contract-checks.yml", mode: "100644", type: "blob"}
               ] and
             ([.tree[] |
               select(.path == "Kandelo/test-workflow-trust.rb") |
@@ -68,9 +65,6 @@ jobs:
           paths=(
             .github/workflows/base-contract-checks.yml
             .github/workflows/contract-checks.yml
-            .github/workflows/dry-run-bottles.yml
-            .github/workflows/maintain-bottles.yml
-            .github/workflows/publish-bottles.yml
             Kandelo/test-workflow-trust.rb
             Kandelo/test-workflow-trust.sh
           )

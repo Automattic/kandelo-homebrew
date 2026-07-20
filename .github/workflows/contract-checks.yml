@@ -1,4 +1,4 @@
-name: Tap contract checks
+name: Retired tap contract checks
 
 on:
   pull_request: {}
@@ -13,12 +13,12 @@ permissions:
   contents: read
 
 jobs:
-  publisher-trust:
+  retired-tap-trust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9 # v1
         with:
           ruby-version: "3.4"
-      - name: Validate publisher trust boundaries
+      - name: Validate retired tap trust boundaries
         run: bash Kandelo/test-workflow-trust.sh
