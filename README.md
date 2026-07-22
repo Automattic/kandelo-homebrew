@@ -65,6 +65,8 @@ Retained migration controls and pilots include:
   Kandelo's musl `catopen` and `catgets` implementation.
 - `procps`, the upstream `ps` process reporter backed by Kandelo's truthful
   cross-process procfs state.
+- `getconf`, OpenBSD's POSIX configuration frontend over Kandelo's real
+  `sysconf`, `pathconf`, and `confstr` interfaces.
 - `ctags`, Universal Ctags' maintained tag generator, `readtags` query client,
   and optscript interpreter with complete C and C++ workflows.
 - `tar`, the GNU archive creation and extraction CLI.
