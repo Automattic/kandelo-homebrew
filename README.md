@@ -47,6 +47,8 @@ Retained migration controls and pilots include:
 - `patch`, GNU's real multi-format file transformation utility replacing the compact metadata scanner;
 - `asa`, FreeBSD's POSIX carriage-control translator for FORTRAN output;
 - `m4`, the GNU macro processor with process-executing builtins backed by the tap's Dash shell;
+- `flex`, the scanner generator with the POSIX `lex` entry point, backed by the
+  tap's GNU M4 at generation time;
 - `gawk`, GNU's pattern scanning and text-processing language;
 - `binutils`, GNU's native WebAssembly archive, symbol, and inspection suite,
   with exact trailing/representable `.wasm.*` custom-section and strip transforms,
