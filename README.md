@@ -51,6 +51,7 @@ Retained migration controls and pilots include:
 - `binutils`, GNU's native WebAssembly archive, symbol, and inspection suite,
   with exact trailing/representable `.wasm.*` custom-section and strip transforms,
   plus explicit rejection of relocatable, dynamic, cross-format, or lossy rewrites;
+- `gettext`, GNU catalog extraction, compilation, singular lookup, and plural lookup tools;
 - `file`, compression-aware file type identification backed by the complete
   `libmagic` database;
 - `what`, FreeBSD's SCCS identification-string extractor;
